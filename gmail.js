@@ -34,9 +34,9 @@ async function exchangeCode(code) {
 async function getAccountEmail(tokens) {
   const client = makeClient();
   client.setCredentials(tokens);
-  const oauth2 = google.oauth2({ version: 'v2', auth: client });
-  const { data } = await oauth2.userinfo.get();
-  return data.email;
+  const gmail = google.gmail({ version: 'v1', auth: client });
+  const { data } = await gmail.users.getProfile({ userId: 'me' });
+  return data.emailAddress;
 }
 
 // Returns { emails: [{direction, contact, subject}], refreshedTokens }
