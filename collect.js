@@ -2,13 +2,13 @@
 /**
  * collect.js — Comm's collection engine
  *
- * Gathers iMessages (AppleScript) and Gmail (API) for a given date,
- * summarizes with Gemini, and writes to the SQLite DB.
+ * Gathers iMessages (chat.db) and Gmail (API) for a given date and stores
+ * full message text + sender in SQLite. No AI summarization.
  *
  * Usage:  node collect.js [YYYY-MM-DD]   (default: yesterday)
  *
- * iMessage permission: System Settings → Privacy & Security → Automation
- *   → your terminal app → Messages ✓
+ * iMessage permission: Full Disk Access for Terminal / node binary
+ *   System Settings → Privacy & Security → Full Disk Access
  *
  * Gmail: connect accounts via the Comm's dashboard at http://localhost:3748
  */
@@ -16,12 +16,11 @@
 'use strict';
 
 const { execFileSync } = require('child_process');
-const fs      = require('fs');
-const path    = require('path');
-const os      = require('os');
-const crypto  = require('crypto');
+const fs       = require('fs');
+const path     = require('path');
+const os       = require('os');
+const crypto   = require('crypto');
 const Database = require('better-sqlite3');
-const { GoogleGenAI } = require('@google/genai');
 const { fetchEmailsForDate } = require('./gmail');
 
 // ---------------------------------------------------------------------------
@@ -31,7 +30,6 @@ const { fetchEmailsForDate } = require('./gmail');
 const DATA_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'comms');
 const DB_PATH  = path.join(DATA_DIR, 'comms.db');
 
-// Load .env from this directory
 function loadEnv() {
   const p = path.join(__dirname, '.env');
   if (!fs.existsSync(p)) return;
@@ -51,6 +49,7 @@ function openDb() {
   const db = new Database(DB_PATH);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS runs (
       id             TEXT PRIMARY KEY,
@@ -62,13 +61,17 @@ function openDb() {
       error          TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS contacts (
-      id       TEXT PRIMARY KEY,
-      run_id   TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-      date     TEXT NOT NULL,
-      contact  TEXT NOT NULL,
-      sent     INTEGER DEFAULT 0,
-      received INTEGER DEFAULT 0
+    -- Individual messages with full text and sender
+    CREATE TABLE IF NOT EXISTS messages (
+      id        TEXT PRIMARY KEY,
+      run_id    TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      date      TEXT NOT NULL,
+      contact   TEXT NOT NULL,
+      handle_id TEXT,
+      direction TEXT NOT NULL,
+      sender    TEXT NOT NULL,
+      text      TEXT,
+      sent_at   TEXT
     );
 
     CREATE TABLE IF NOT EXISTS emails (
@@ -78,9 +81,19 @@ function openDb() {
       direction TEXT NOT NULL,
       contact   TEXT NOT NULL,
       subject   TEXT,
+      snippet   TEXT,
       account   TEXT
     );
 
+    -- Legacy tables kept for DB compat; no longer written
+    CREATE TABLE IF NOT EXISTS contacts (
+      id       TEXT PRIMARY KEY,
+      run_id   TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      date     TEXT NOT NULL,
+      contact  TEXT NOT NULL,
+      sent     INTEGER DEFAULT 0,
+      received INTEGER DEFAULT 0
+    );
     CREATE TABLE IF NOT EXISTS summaries (
       run_id        TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
       date          TEXT NOT NULL,
@@ -96,10 +109,14 @@ function openDb() {
       added_at   TEXT NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_contacts_date  ON contacts(date);
-    CREATE INDEX IF NOT EXISTS idx_emails_date    ON emails(date);
-    CREATE INDEX IF NOT EXISTS idx_summaries_date ON summaries(date);
+    CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(date);
+    CREATE INDEX IF NOT EXISTS idx_emails_date   ON emails(date);
   `);
+
+  // Migration: add snippet to emails if not present
+  const emailCols = db.pragma('table_info(emails)').map(c => c.name);
+  if (!emailCols.includes('snippet')) db.exec('ALTER TABLE emails ADD COLUMN snippet TEXT');
+
   return db;
 }
 
@@ -120,7 +137,7 @@ function runAppleScript(script, { timeout = 120_000 } = {}) {
     const lower  = stderr.toLowerCase();
     if (lower.includes('not allowed') || lower.includes('not authorized') ||
         lower.includes('authorization') || lower.includes('-1743')) {
-      const e = new Error('Automation permission denied for Messages — grant access in System Settings → Privacy & Security → Automation');
+      const e = new Error('Automation permission denied for Contacts — grant access in System Settings → Privacy & Security → Automation');
       e.permissionDenied = true;
       throw e;
     }
@@ -130,125 +147,154 @@ function runAppleScript(script, { timeout = 120_000 } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// iMessage collector
+// Contact name resolution via Contacts.app
 // ---------------------------------------------------------------------------
 
-function fetchMessages(year, month, day) {
+function resolveHandlesToNames(handles) {
+  if (!handles.length) return {};
+
+  // Only attempt to resolve phone numbers (+digits) and email addresses,
+  // not display names (e.g. "Family Chat") which won't be in Contacts.
+  const toResolve = [...new Set(handles)].filter(h => h && (/^\+?\d{5,}/.test(h) || h.includes('@')));
+  if (!toResolve.length) return {};
+
+  const listStr = toResolve
+    .map(h => `"${h.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)
+    .join(', ');
+
   const script = `
-tell application "Messages"
-  set targetYear  to ${year}
-  set targetMonth to ${month}
-  set targetDay   to ${day}
-  set out to {}
-  repeat with aChat in every chat
-    set s to 0
-    set r to 0
+set handleList to {${listStr}}
+set resultList to {}
+tell application "Contacts"
+  repeat with theHandle in handleList
+    set resolvedName to theHandle as text
     try
-      repeat with aMsg in (messages of aChat)
-        try
-          set d to date sent of aMsg
-          if (year of d as integer) is targetYear and ¬
-             (month of d as integer) is targetMonth and ¬
-             (day of d as integer) is targetDay then
-            try
-              if direction of aMsg is outgoing then
-                set s to s + 1
-              else
-                set r to r + 1
-              end if
-            on error
-              set r to r + 1
-            end try
-          end if
-        end try
-      end repeat
+      set phonePeople to (every person whose value of phones contains (theHandle as text))
+      if (count of phonePeople) > 0 then
+        set resolvedName to name of item 1 of phonePeople
+      else
+        set emailPeople to (every person whose value of emails contains (theHandle as text))
+        if (count of emailPeople) > 0 then
+          set resolvedName to name of item 1 of emailPeople
+        end if
+      end if
     end try
-    if s > 0 or r > 0 then
-      set end of out to ((name of aChat) & "|" & s & "|" & r)
-    end if
+    set end of resultList to ((theHandle as text) & "~~SEP~~" & resolvedName)
   end repeat
-  return out
-end tell`;
+end tell
+set AppleScript's text item delimiters to "~~NL~~"
+return resultList as text`;
 
-  const raw = runAppleScript(script);
-  if (!raw) return [];
-  return raw.split(', ')
-    .map(l => l.trim()).filter(Boolean)
-    .map(l => {
-      const p = l.split('|');
-      if (p.length < 3) return null;
-      return { contact: p[0].trim(), sent: parseInt(p[1], 10) || 0, received: parseInt(p[2], 10) || 0 };
-    })
-    .filter(r => r && r.contact && r.contact !== 'missing value');
-}
-
-// Quick connectivity test — used by the server's debug endpoint
-function testMessagesAccess() {
   try {
-    const result = runAppleScript(`tell application "Messages" to count every chat`);
-    return { ok: true, chatCount: parseInt(result, 10) || 0 };
-  } catch (err) {
-    return { ok: false, error: err.message, permissionDenied: err.permissionDenied || false };
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Gemini summarization
-// ---------------------------------------------------------------------------
-
-const COMM_SYSTEM = `You are summarizing a day's communication activity for a private personal knowledge system.
-Never quote message text or email bodies verbatim. All items must be pointer-summaries.
-Return ONLY valid JSON, no markdown fences.`;
-
-async function summarize(date, messages, emails) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
-
-  const lines = [];
-  if (messages.length) {
-    lines.push('iMessage activity:');
-    for (const m of messages) lines.push(`  ${m.contact}: sent ${m.sent}, received ${m.received}`);
-  }
-  if (emails.length) {
-    lines.push('Email activity:');
-    for (const e of emails) {
-      lines.push(e.direction === 'received'
-        ? `  Received from ${e.contact}${e.account ? ` (→${e.account})` : ''}: "${e.subject}"`
-        : `  Sent to ${e.contact}${e.account ? ` (from ${e.account})` : ''}: "${e.subject}"`);
+    const raw = runAppleScript(script, { timeout: 60_000 });
+    const result = {};
+    if (!raw) return result;
+    for (const pair of raw.split('~~NL~~')) {
+      const idx = pair.indexOf('~~SEP~~');
+      if (idx === -1) continue;
+      const handle = pair.slice(0, idx).trim();
+      const name   = pair.slice(idx + 7).trim();
+      if (handle) result[handle] = name || handle;
     }
+    return result;
+  } catch (err) {
+    console.warn(`Contact resolution: ${err.message}`);
+    return {};
   }
-  if (!lines.length) return null;
-
-  const prompt = `Summarize this communication log for ${date}.
-
-Return JSON:
-{
-  "text": "<2-4 sentences, first-person, pointer-summaries only. Who the user communicated with and why it mattered. Never quote message content.>",
-  "items": [
-    { "text": "<pointer-phrase per notable exchange, max 18 words>", "kind": "note" }
-  ],
-  "entities": [
-    { "kind": "person", "label": "<full name or contact identifier>" }
-  ]
 }
 
-Only include people with meaningful exchanges (skip newsletters, mass email, automated senders).
-Capture 3-7 most substantive exchanges in items.
+// ---------------------------------------------------------------------------
+// iMessage collector — reads chat.db directly (Full Disk Access required)
+// ---------------------------------------------------------------------------
 
-DATA:\n${lines.join('\n')}`;
+const CHAT_DB = path.join(os.homedir(), 'Library', 'Messages', 'chat.db');
+// Apple's CoreData epoch is Jan 1 2001; message.date is nanoseconds since then
+const APPLE_EPOCH_OFFSET = 978307200;
+
+function fetchMessages(date) {
+  if (!fs.existsSync(CHAT_DB)) {
+    throw new Error(`chat.db not found at ${CHAT_DB}`);
+  }
+
+  const startUnix  = Date.UTC(...date.split('-').map((v, i) => i === 1 ? Number(v) - 1 : Number(v))) / 1000;
+  const endUnix    = startUnix + 86400;
+  const startApple = BigInt(Math.round((startUnix - APPLE_EPOCH_OFFSET) * 1e9));
+  const endApple   = BigInt(Math.round((endUnix   - APPLE_EPOCH_OFFSET) * 1e9));
+
+  let db;
+  try {
+    db = new Database(CHAT_DB, { readonly: true, timeout: 5000 });
+  } catch (err) {
+    const e = new Error(`Cannot open chat.db — grant Full Disk Access to Terminal (or node) in System Settings → Privacy & Security → Full Disk Access. Detail: ${err.message}`);
+    e.fullDiskAccessRequired = true;
+    throw e;
+  }
 
   try {
-    const genai = new GoogleGenAI({ apiKey });
-    const resp = await genai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      config: { systemInstruction: COMM_SYSTEM, responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: 2048 },
+    const rows = db.prepare(`
+      SELECT
+        m.is_from_me,
+        m.text,
+        CAST(m.date / 1000000000 AS INTEGER) AS apple_seconds,
+        h.id AS sender_handle,
+        COALESCE(
+          c.display_name,
+          h.id,
+          (SELECT ch.id FROM chat_handle_join chj
+           JOIN handle ch ON ch.ROWID = chj.handle_id
+           WHERE chj.chat_id = c.ROWID LIMIT 1)
+        ) AS chat_key
+      FROM message m
+      LEFT JOIN handle h              ON h.ROWID = m.handle_id
+      LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+      LEFT JOIN chat c                ON c.ROWID = cmj.chat_id
+      WHERE m.date >= ? AND m.date < ?
+        AND m.item_type = 0
+      ORDER BY m.date
+    `).all(startApple, endApple);
+
+    // Resolve all raw handles to contact names in one AppleScript call
+    const rawHandles = new Set();
+    for (const r of rows) {
+      if (r.sender_handle) rawHandles.add(r.sender_handle);
+      if (r.chat_key)      rawHandles.add(r.chat_key);
+    }
+    const nameMap = resolveHandlesToNames([...rawHandles]);
+
+    return rows.map(row => {
+      const unixSec = Number(row.apple_seconds) + APPLE_EPOCH_OFFSET;
+      const sentAt  = new Date(unixSec * 1000).toISOString();
+      const contact = row.chat_key
+        ? (nameMap[row.chat_key] || row.chat_key)
+        : 'Unknown';
+      const sender  = row.is_from_me
+        ? 'Me'
+        : (row.sender_handle ? (nameMap[row.sender_handle] || row.sender_handle) : 'Unknown');
+
+      return {
+        contact,
+        sender,
+        handle_id: row.sender_handle || null,
+        direction: row.is_from_me ? 'sent' : 'received',
+        text:      row.text || null,
+        sent_at:   sentAt,
+      };
     });
-    const raw = (resp.text || '').trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '');
-    return JSON.parse(raw);
+  } finally {
+    db.close();
+  }
+}
+
+// Quick connectivity test — used by the debug endpoint
+function testMessagesAccess() {
+  if (!fs.existsSync(CHAT_DB)) return { ok: false, error: `chat.db not found at ${CHAT_DB}` };
+  try {
+    const db    = new Database(CHAT_DB, { readonly: true, timeout: 3000 });
+    const count = db.prepare('SELECT COUNT(*) n FROM message').get().n;
+    db.close();
+    return { ok: true, method: 'chat.db', messageCount: count };
   } catch (err) {
-    console.warn(`Gemini failed: ${err.message}`);
-    return null;
+    return { ok: false, error: err.message, fullDiskAccessRequired: true };
   }
 }
 
@@ -257,7 +303,6 @@ DATA:\n${lines.join('\n')}`;
 // ---------------------------------------------------------------------------
 
 async function collect(date, { onProgress } = {}) {
-  const [year, month, day] = date.split('-').map(Number);
   const emit = onProgress || (() => {});
   const db   = openDb();
 
@@ -266,18 +311,18 @@ async function collect(date, { onProgress } = {}) {
   db.prepare(`INSERT INTO runs (id, date, collected_at, status) VALUES (?, ?, ?, 'running')`)
     .run(runId, date, new Date().toISOString());
 
-  let messages = [], emails = [], geminiResult = null;
+  let messages = [], emails = [];
   const warnings = [];
 
   try {
-    // iMessages
+    // iMessages (reads chat.db directly — requires Full Disk Access)
     emit({ step: 'messages', status: 'running' });
     try {
-      messages = fetchMessages(year, month, day);
+      messages = fetchMessages(date);
       emit({ step: 'messages', status: 'done', count: messages.length });
     } catch (err) {
       warnings.push(err.message);
-      emit({ step: 'messages', status: 'error', error: err.message, permissionDenied: err.permissionDenied });
+      emit({ step: 'messages', status: 'error', error: err.message, fullDiskAccessRequired: err.fullDiskAccessRequired });
     }
 
     // Gmail — one pass per connected account
@@ -291,7 +336,6 @@ async function collect(date, { onProgress } = {}) {
         try {
           const { emails: accountEmails, refreshedTokens } = await fetchEmailsForDate(account.token_json, date);
           for (const e of accountEmails) emails.push({ ...e, account: account.email });
-          // Persist refreshed tokens (access tokens expire; googleapis auto-refreshes)
           if (refreshedTokens) {
             const updated = { ...JSON.parse(account.token_json), ...refreshedTokens };
             db.prepare('UPDATE gmail_accounts SET token_json = ? WHERE id = ?')
@@ -305,35 +349,26 @@ async function collect(date, { onProgress } = {}) {
       emit({ step: 'gmail', status: 'done', count: emails.length, errors: gmailErrors });
     }
 
-    // Summarize
-    emit({ step: 'gemini', status: 'running' });
-    if (messages.length || emails.length) {
-      geminiResult = await summarize(date, messages, emails);
-    }
-    emit({ step: 'gemini', status: geminiResult ? 'done' : 'skipped' });
-
     // Write to DB
     db.transaction(() => {
       for (const m of messages) {
-        db.prepare(`INSERT INTO contacts (id, run_id, date, contact, sent, received) VALUES (?, ?, ?, ?, ?, ?)`)
-          .run(crypto.randomUUID(), runId, date, m.contact, m.sent, m.received);
+        db.prepare(`
+          INSERT INTO messages (id, run_id, date, contact, handle_id, direction, sender, text, sent_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(crypto.randomUUID(), runId, date, m.contact, m.handle_id, m.direction, m.sender, m.text, m.sent_at);
       }
       for (const e of emails) {
-        db.prepare(`INSERT INTO emails (id, run_id, date, direction, contact, subject, account) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-          .run(crypto.randomUUID(), runId, date, e.direction, e.contact, e.subject || null, e.account || null);
-      }
-      if (geminiResult) {
-        db.prepare(`INSERT INTO summaries (run_id, date, text, items_json, entities_json) VALUES (?, ?, ?, ?, ?)`)
-          .run(runId, date, geminiResult.text || null,
-            JSON.stringify(geminiResult.items || []),
-            JSON.stringify(geminiResult.entities || []));
+        db.prepare(`
+          INSERT INTO emails (id, run_id, date, direction, contact, subject, snippet, account)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(crypto.randomUUID(), runId, date, e.direction, e.contact, e.subject || null, e.snippet || null, e.account || null);
       }
       db.prepare(`UPDATE runs SET status='done', messages_count=?, emails_count=? WHERE id=?`)
         .run(messages.length, emails.length, runId);
     })();
 
     emit({ step: 'done', messages: messages.length, emails: emails.length, warnings });
-    return { ok: true, runId, date, messages, emails, summary: geminiResult, warnings };
+    return { ok: true, runId, date, messages, emails, warnings };
 
   } catch (err) {
     db.prepare(`UPDATE runs SET status='error', error=? WHERE id=?`).run(err.message, runId);
@@ -359,17 +394,9 @@ function getRunDetail(date) {
   try {
     const run = db.prepare('SELECT * FROM runs WHERE date = ?').get(date);
     if (!run) return null;
-    const contacts = db.prepare('SELECT * FROM contacts WHERE run_id = ? ORDER BY (sent + received) DESC').all(run.id);
+    const messages = db.prepare('SELECT * FROM messages WHERE run_id = ? ORDER BY sent_at').all(run.id);
     const emails   = db.prepare('SELECT * FROM emails   WHERE run_id = ? ORDER BY rowid').all(run.id);
-    const summary  = db.prepare('SELECT * FROM summaries WHERE run_id = ?').get(run.id);
-    return {
-      run, contacts, emails,
-      summary: summary ? {
-        text:     summary.text,
-        items:    JSON.parse(summary.items_json    || '[]'),
-        entities: JSON.parse(summary.entities_json || '[]'),
-      } : null,
-    };
+    return { run, messages, emails };
   } finally { db.close(); }
 }
 
@@ -420,24 +447,29 @@ if (require.main === module) {
   collect(date, {
     onProgress({ step, status, count, error, warnings }) {
       if (status === 'running') log(`${step}…`);
-      else if (status === 'done') log(`${step}: ${count != null ? count : 'ok'}`);
-      else if (status === 'error') log(`${step}: skipped — ${error}`);
+      else if (status === 'done')    log(`${step}: ${count != null ? count : 'ok'}`);
+      else if (status === 'error')   log(`${step}: skipped — ${error}`);
       else if (status === 'skipped') log(`${step}: skipped — ${error || 'no data'}`);
       else if (step === 'done') {
-        log(`complete — ${count || 0} messages contacts, ${warnings?.length || 0} warnings`);
+        log(`complete — ${warnings?.length || 0} warnings`);
         if (warnings?.length) for (const w of warnings) log(`  ⚠ ${w}`);
       }
     },
   }).then(r => {
     log(`DB: ${DB_PATH}`);
-    if (r.summary?.text) console.log('\n' + r.summary.text);
     if (r.messages.length) {
-      console.log('\niMessages:');
-      for (const m of r.messages) console.log(`  ${m.contact}: ↑${m.sent} ↓${m.received}`);
+      console.log(`\niMessages (${r.messages.length} messages):`);
+      for (const m of r.messages) {
+        const ts = m.sent_at ? new Date(m.sent_at).toLocaleTimeString() : '';
+        console.log(`  [${ts}] ${m.sender} → ${m.contact}: ${(m.text || '(no text)').slice(0, 80)}`);
+      }
     }
     if (r.emails.length) {
-      console.log('\nGmail:');
-      for (const e of r.emails) console.log(`  ${e.direction === 'received' ? '↓' : '↑'} [${e.account}] ${e.contact}: ${e.subject}`);
+      console.log(`\nGmail (${r.emails.length} emails):`);
+      for (const e of r.emails) {
+        const arrow = e.direction === 'received' ? '↓' : '↑';
+        console.log(`  ${arrow} [${e.account}] ${e.contact}: ${e.subject}`);
+      }
     }
   }).catch(err => { console.error('Fatal:', err.message); process.exit(1); });
 }

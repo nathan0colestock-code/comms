@@ -108,15 +108,24 @@ app.get('/api/gmail/auth', (req, res) => {
 
 app.get('/api/gmail/callback', async (req, res) => {
   const { code, error } = req.query;
-  if (error) return res.redirect('/?gmail_error=' + encodeURIComponent(error));
+  if (error) {
+    console.error('[gmail callback] Google returned error:', error);
+    return res.redirect('/?gmail_error=' + encodeURIComponent(error));
+  }
   if (!code) return res.redirect('/?gmail_error=no_code');
   try {
     const tokens = await exchangeCode(code);
     const email  = await getAccountEmail(tokens);
     saveGmailAccount(email, tokens);
+    console.log('[gmail] connected:', email);
     res.redirect('/?gmail_connected=' + encodeURIComponent(email));
   } catch (e) {
-    res.redirect('/?gmail_error=' + encodeURIComponent(e.message));
+    const data = e.response?.data;
+    const detail = (typeof data === 'object' && data !== null)
+      ? (data.error_description || data.error || JSON.stringify(data))
+      : (e.message || 'unknown error');
+    console.error('[gmail callback] error:', detail);
+    res.redirect('/?gmail_error=' + encodeURIComponent(detail));
   }
 });
 
@@ -133,6 +142,55 @@ app.delete('/api/gmail/accounts/:id', (req, res) => {
 
 app.get('/api/debug/messages', (req, res) => {
   res.json(testMessagesAccess());
+});
+
+// Shows the date of the most recent message across the first 5 chats
+app.get('/api/debug/messages-date', (req, res) => {
+  const { execFileSync } = require('child_process');
+  try {
+    const raw = execFileSync('osascript', ['-'], {
+      input: `
+tell application "Messages"
+  set out to {}
+  set n to 0
+  repeat with aChat in every chat
+    try
+      set msgs to messages of aChat
+      if (count of msgs) > 0 then
+        set lastMsg to item (count of msgs) of msgs
+        set end of out to ((name of aChat) & " | last: " & (date sent of lastMsg as string) & " | count: " & (count of msgs))
+      end if
+    end try
+    set n to n + 1
+    if n >= 5 then exit repeat
+  end repeat
+  return out
+end tell`,
+      encoding: 'utf8', timeout: 30000, stdio: ['pipe','pipe','pipe'],
+    }).trim();
+    res.json({ ok: true, sample: raw });
+  } catch (e) {
+    res.json({ ok: false, error: (e.stderr || e.message || '').toString() });
+  }
+});
+
+// Tests Gmail API with the first connected account
+app.get('/api/debug/gmail', async (req, res) => {
+  const accounts = getGmailAccounts();
+  if (!accounts.length) return res.json({ ok: false, error: 'No Gmail accounts connected — click + Gmail first' });
+  const { fetchEmailsForDate } = require('./gmail');
+  const Database = require('better-sqlite3');
+  const os2 = require('os'), path2 = require('path');
+  const db2 = new Database(path2.join(os2.homedir(), 'Library', 'Application Support', 'comms', 'comms.db'));
+  const account = db2.prepare('SELECT * FROM gmail_accounts LIMIT 1').get();
+  db2.close();
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const result = await fetchEmailsForDate(account.token_json, today);
+    res.json({ ok: true, account: account.email, email_count: result.emails.length, sample: result.emails.slice(0, 3) });
+  } catch (e) {
+    res.json({ ok: false, account: account.email, error: e.message });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -203,23 +261,27 @@ header .spacer { flex: 1; }
 .summary-box { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-bottom: 20px; font-size: 13px; line-height: 1.6; }
 
 .section-title { font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 10px; }
-.contact-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; margin-bottom: 20px; }
-.contact-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
-.contact-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.contact-counts { font-size: 11px; color: var(--muted); margin-top: 3px; }
-.contact-counts span { color: var(--text); font-weight: 600; }
+.msg-group { margin-bottom: 20px; }
+.msg-group-name { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+.msg-bubble-list { display: flex; flex-direction: column; gap: 4px; }
+.msg-bubble { display: flex; gap: 8px; align-items: flex-start; }
+.msg-bubble.sent { flex-direction: row-reverse; }
+.msg-meta { font-size: 10px; color: var(--muted); flex-shrink: 0; padding-top: 4px; min-width: 36px; text-align: right; }
+.msg-bubble.sent .msg-meta { text-align: left; }
+.msg-text { font-size: 13px; padding: 6px 10px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); max-width: 75%; line-height: 1.5; word-break: break-word; }
+.msg-bubble.sent .msg-text { background: #1d2d4a; border-color: #2a3f6a; }
+.msg-empty { font-size: 12px; color: var(--muted); font-style: italic; padding: 4px 10px; }
 
-.email-list { display: flex; flex-direction: column; gap: 5px; margin-bottom: 20px; }
-.email-row { display: flex; align-items: baseline; gap: 8px; padding: 7px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-size: 13px; min-width: 0; }
+.email-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 20px; }
+.email-row { display: flex; flex-direction: column; gap: 3px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-size: 13px; min-width: 0; }
+.email-row-header { display: flex; align-items: baseline; gap: 8px; }
 .email-dir { font-size: 11px; font-weight: 700; flex-shrink: 0; }
 .email-dir.received { color: var(--green); }
 .email-dir.sent { color: var(--accent); }
 .email-acct { font-size: 10px; color: var(--muted); flex-shrink: 0; max-width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .email-from { color: var(--muted); flex-shrink: 0; min-width: 100px; max-width: 160px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .email-subject { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.items-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 20px; }
-.item-row { font-size: 13px; color: var(--muted); padding: 5px 0; border-bottom: 1px solid var(--border); }
-.item-row::before { content: "·"; margin-right: 8px; color: var(--accent); }
+.email-snippet { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .debug-box { font-family: monospace; font-size: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; color: var(--muted); margin-top: 8px; }
 
@@ -321,7 +383,7 @@ async function loadRuns() {
     else if (r.status === 'error') { badge = 'error'; label = 'err'; }
     else if (r.status === 'done') {
       const n = (r.messages_count || 0) + (r.emails_count || 0);
-      badge = n ? 'done' : 'empty'; label = n ? n + ' items' : '—';
+      badge = n ? 'done' : 'empty'; label = n ? (r.messages_count || 0) + 'msg ' + (r.emails_count || 0) + 'em' : '—';
     } else { badge = 'empty'; label = '—'; }
     return \`<div class="run-row \${active}" onclick="selectDate('\${r.date}')">
       <span class="dow">\${dow}</span>
@@ -365,59 +427,74 @@ function renderDetail(date, detail) {
     return;
   }
 
-  const { run, contacts, emails, summary } = detail;
-  const collectLabel = run.status === 'running' ? 'Collecting…' : 'Re-collect';
+  const { run, messages, emails } = detail;
+  const collectLabel    = run.status === 'running' ? 'Collecting…' : 'Re-collect';
   const collectDisabled = run.status === 'running' ? 'disabled' : '';
-  const collectedAt = run.collected_at ? new Date(run.collected_at).toLocaleTimeString() : '';
+  const collectedAt     = run.collected_at ? new Date(run.collected_at).toLocaleTimeString() : '';
 
   let html = \`<div class="detail-header">
     <div>
       <div class="detail-date">\${run.date}</div>
-      <div class="detail-meta">\${run.messages_count} iMessage contacts · \${run.emails_count} emails · \${collectedAt}</div>
+      <div class="detail-meta">\${run.messages_count} iMessages · \${run.emails_count} emails · \${collectedAt}</div>
     </div>
     <button class="btn ghost" \${collectDisabled} onclick="triggerCollect('\${run.date}')">\${collectLabel}</button>
   </div>\`;
 
   // No-data warning
-  if (run.status === 'done' && !contacts?.length && !emails?.length) {
+  if (run.status === 'done' && !messages?.length && !emails?.length) {
     html += \`<div class="warning-box">
       <strong>No data collected.</strong><br><br>
-      <strong>Gmail:</strong> make sure at least one account is connected (use the + Gmail button above).<br>
-      <strong>iMessages:</strong> run <code>osascript -e 'tell application "Messages" to count every chat'</code> in Terminal to trigger the Automation permission dialog, then re-collect.
-      Or check <a href="/api/debug/messages" target="_blank" style="color:var(--yellow)">debug → messages</a> to see what's happening.
+      <strong>Gmail:</strong> connect an account with + Gmail. If you saw a Google warning screen, click <em>Advanced → Go to app (unsafe)</em> to continue — this is expected for apps not yet verified by Google.<br><br>
+      <strong>iMessages:</strong> requires Full Disk Access. Go to System Settings → Privacy &amp; Security → Full Disk Access and add Terminal (or the node binary). Then re-collect.<br><br>
+      <a href="/api/debug/messages" target="_blank" style="color:var(--yellow)">Check messages access →</a>
     </div>\`;
   }
 
-  if (summary?.text) html += \`<p class="section-title">Summary</p><div class="summary-box">\${esc(summary.text)}</div>\`;
-
-  if (contacts?.length) {
-    html += '<p class="section-title">iMessages</p><div class="contact-grid">';
-    for (const c of contacts) {
-      html += \`<div class="contact-card">
-        <div class="contact-name" title="\${esc(c.contact)}">\${esc(c.contact)}</div>
-        <div class="contact-counts">↑<span>\${c.sent}</span> ↓<span>\${c.received}</span></div>
-      </div>\`;
+  if (messages?.length) {
+    // Group messages by contact
+    const groups = new Map();
+    for (const m of messages) {
+      if (!groups.has(m.contact)) groups.set(m.contact, []);
+      groups.get(m.contact).push(m);
     }
-    html += '</div>';
+    html += \`<p class="section-title">iMessages (\${messages.length})</p>\`;
+    for (const [contact, msgs] of groups) {
+      html += \`<div class="msg-group">
+        <div class="msg-group-name">\${esc(contact)}</div>
+        <div class="msg-bubble-list">\`;
+      for (const m of msgs) {
+        const ts = m.sent_at ? new Date(m.sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+        const cls = m.direction === 'sent' ? 'sent' : '';
+        if (m.text) {
+          html += \`<div class="msg-bubble \${cls}">
+            <div class="msg-meta">\${ts}</div>
+            <div class="msg-text">\${esc(m.text)}</div>
+          </div>\`;
+        } else {
+          html += \`<div class="msg-bubble \${cls}">
+            <div class="msg-meta">\${ts}</div>
+            <div class="msg-empty">(attachment)</div>
+          </div>\`;
+        }
+      }
+      html += '</div></div>';
+    }
   }
 
   if (emails?.length) {
-    html += '<p class="section-title">Gmail</p><div class="email-list">';
+    html += \`<p class="section-title">Gmail (\${emails.length})</p><div class="email-list">\`;
     for (const e of emails) {
       const arrow = e.direction === 'received' ? '↓' : '↑';
       html += \`<div class="email-row">
-        <span class="email-dir \${e.direction}">\${arrow}</span>
-        \${e.account ? \`<span class="email-acct" title="\${esc(e.account)}">\${esc(e.account.split('@')[0])}</span>\` : ''}
-        <span class="email-from" title="\${esc(e.contact)}">\${esc(e.contact)}</span>
-        <span class="email-subject">\${esc(e.subject || '(no subject)')}</span>
+        <div class="email-row-header">
+          <span class="email-dir \${e.direction}">\${arrow}</span>
+          \${e.account ? \`<span class="email-acct" title="\${esc(e.account)}">\${esc(e.account.split('@')[0])}</span>\` : ''}
+          <span class="email-from" title="\${esc(e.contact)}">\${esc(e.contact)}</span>
+          <span class="email-subject">\${esc(e.subject || '(no subject)')}</span>
+        </div>
+        \${e.snippet ? \`<div class="email-snippet">\${esc(e.snippet)}</div>\` : ''}
       </div>\`;
     }
-    html += '</div>';
-  }
-
-  if (summary?.items?.length) {
-    html += '<p class="section-title">Items</p><div class="items-list">';
-    for (const item of summary.items) html += \`<div class="item-row">\${esc(item.text)}</div>\`;
     html += '</div>';
   }
 

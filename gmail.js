@@ -84,7 +84,7 @@ async function fetchEmailsForDate(tokenJson, date) {
           const contact = parseContact(rawContact);
           const subject = h('subject') || '(no subject)';
 
-          if (contact) emails.push({ direction, contact, subject });
+          if (contact) emails.push({ direction, contact, subject, snippet: detail.data.snippet || null });
         } catch { /* skip individual message errors */ }
       }
     } catch { /* skip if label inaccessible */ }
