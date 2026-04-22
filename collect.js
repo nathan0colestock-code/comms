@@ -237,13 +237,11 @@ function fetchMessages(date) {
         m.text,
         CAST(m.date / 1000000000 AS INTEGER) AS apple_seconds,
         h.id AS sender_handle,
-        COALESCE(
-          c.display_name,
-          h.id,
-          (SELECT ch.id FROM chat_handle_join chj
-           JOIN handle ch ON ch.ROWID = chj.handle_id
-           WHERE chj.chat_id = c.ROWID LIMIT 1)
-        ) AS chat_key
+        NULLIF(c.display_name, '')  AS group_name,
+        c.chat_identifier,
+        (SELECT ch.id FROM chat_handle_join chj
+         JOIN handle ch ON ch.ROWID = chj.handle_id
+         WHERE chj.chat_id = c.ROWID LIMIT 1) AS first_participant
       FROM message m
       LEFT JOIN handle h              ON h.ROWID = m.handle_id
       LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
@@ -253,21 +251,30 @@ function fetchMessages(date) {
       ORDER BY m.date
     `).all(startApple, endApple);
 
-    // Resolve all raw handles to contact names in one AppleScript call
+    // Collect all raw handles for name resolution
     const rawHandles = new Set();
     for (const r of rows) {
-      if (r.sender_handle) rawHandles.add(r.sender_handle);
-      if (r.chat_key)      rawHandles.add(r.chat_key);
+      if (r.sender_handle)  rawHandles.add(r.sender_handle);
+      if (r.first_participant) rawHandles.add(r.first_participant);
+      // chat_identifier is a phone number for 1-on-1 chats
+      if (r.chat_identifier && /^\+?\d/.test(r.chat_identifier)) rawHandles.add(r.chat_identifier);
     }
     const nameMap = resolveHandlesToNames([...rawHandles]);
 
     return rows.map(row => {
       const unixSec = Number(row.apple_seconds) + APPLE_EPOCH_OFFSET;
       const sentAt  = new Date(unixSec * 1000).toISOString();
-      const contact = row.chat_key
-        ? (nameMap[row.chat_key] || row.chat_key)
-        : 'Unknown';
-      const sender  = row.is_from_me
+
+      // contact = who this conversation is with (group name or other person)
+      let contact;
+      if (row.group_name) {
+        contact = row.group_name;
+      } else {
+        const handle = row.first_participant || row.chat_identifier;
+        contact = handle ? (nameMap[handle] || handle) : 'Unknown';
+      }
+
+      const sender = row.is_from_me
         ? 'Me'
         : (row.sender_handle ? (nameMap[row.sender_handle] || row.sender_handle) : 'Unknown');
 
@@ -389,6 +396,27 @@ function getRuns(limit = 60) {
   finally { db.close(); }
 }
 
+// Returns every ISO date from the day after the last successful run up to today.
+// Returns [] if nothing has been collected yet (caller can decide to collect from today).
+function getMissingDates() {
+  const db = openDb();
+  try {
+    const last = db.prepare(`SELECT date FROM runs WHERE status='done' ORDER BY date DESC LIMIT 1`).get();
+    const today = new Date().toISOString().slice(0, 10);
+    if (!last) return [today];
+
+    const dates = [];
+    const cursor = new Date(last.date + 'T12:00:00Z');
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    const end = new Date(today + 'T12:00:00Z');
+    while (cursor <= end) {
+      dates.push(cursor.toISOString().slice(0, 10));
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+    return dates;
+  } finally { db.close(); }
+}
+
 function getRunDetail(date) {
   const db = openDb();
   try {
@@ -424,7 +452,7 @@ function deleteGmailAccount(id) {
 }
 
 module.exports = {
-  collect, getRuns, getRunDetail,
+  collect, getRuns, getRunDetail, getMissingDates,
   getGmailAccounts, saveGmailAccount, deleteGmailAccount,
   testMessagesAccess,
   DB_PATH,

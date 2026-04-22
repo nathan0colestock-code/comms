@@ -36,7 +36,7 @@ function loadEnv() {
 loadEnv();
 
 const {
-  collect, getRuns, getRunDetail,
+  collect, getRuns, getRunDetail, getMissingDates,
   getGmailAccounts, saveGmailAccount, deleteGmailAccount,
   testMessagesAccess, DB_PATH,
 } = require('./collect');
@@ -89,6 +89,27 @@ app.post('/api/collect/:date', async (req, res) => {
   res.json({ ok: true, date });
 });
 
+// Collect all dates since last successful run (sequential, one day at a time)
+app.post('/api/collect/catchup', async (req, res) => {
+  const dates = getMissingDates();
+  if (!dates.length) return res.json({ ok: true, dates: [], message: 'Already up to date' });
+
+  res.json({ ok: true, dates });
+
+  // Run sequentially in background so each day's data is complete before next
+  (async () => {
+    for (const date of dates) {
+      if (jobs.get(date)?.running) continue;
+      const log = [];
+      jobs.set(date, { running: true, log, startedAt: new Date().toISOString() });
+      try {
+        await collect(date, { onProgress: e => log.push({ ...e, at: new Date().toISOString() }) });
+      } catch {}
+      if (jobs.get(date)) jobs.get(date).running = false;
+    }
+  })();
+});
+
 // ---------------------------------------------------------------------------
 // Gmail account management
 // ---------------------------------------------------------------------------
@@ -121,9 +142,18 @@ app.get('/api/gmail/callback', async (req, res) => {
     res.redirect('/?gmail_connected=' + encodeURIComponent(email));
   } catch (e) {
     const data = e.response?.data;
-    const detail = (typeof data === 'object' && data !== null)
-      ? (data.error_description || data.error || JSON.stringify(data))
-      : (e.message || 'unknown error');
+    let detail;
+    if (typeof data === 'object' && data !== null) {
+      const desc = data.error_description;
+      const err  = data.error;
+      detail = (typeof desc === 'string' && desc) ? desc
+             : (typeof err  === 'string' && err)  ? err
+             : JSON.stringify(data);
+    } else if (typeof data === 'string' && data) {
+      detail = data;
+    } else {
+      detail = e.message || 'unknown error';
+    }
     console.error('[gmail callback] error:', detail);
     res.redirect('/?gmail_error=' + encodeURIComponent(detail));
   }
@@ -304,7 +334,8 @@ header .spacer { flex: 1; }
   <div class="runs-panel">
     <div class="runs-toolbar">
       <span class="label">Runs</span>
-      <button class="btn" id="collect-today-btn" onclick="collectToday()">Collect today</button>
+      <button class="btn ghost" id="catchup-btn" onclick="catchUp()" title="Collect all days since last run">Catch up</button>
+      <button class="btn" id="collect-today-btn" onclick="collectToday()">Today</button>
     </div>
     <div class="runs-list" id="runs-list"></div>
   </div>
@@ -513,6 +544,32 @@ async function triggerCollect(date) {
 async function collectToday() {
   const today = new Date().toISOString().slice(0, 10);
   await triggerCollect(today);
+}
+
+async function catchUp() {
+  const btn = document.getElementById('catchup-btn');
+  btn.disabled = true;
+  btn.textContent = 'Catching up…';
+  try {
+    const r = await api('/api/collect/catchup', { method: 'POST' });
+    if (r.dates?.length) {
+      toast('Collecting ' + r.dates.length + ' day(s)…');
+      await loadRuns();
+      // Poll until all queued dates are done
+      const poll = setInterval(async () => {
+        await loadRuns();
+        const runs = await api('/api/runs').catch(() => []);
+        const anyRunning = r.dates.some(d => runs.find(run => run.date === d)?.status === 'running');
+        if (!anyRunning) { clearInterval(poll); btn.disabled = false; btn.textContent = 'Catch up'; }
+      }, 3000);
+    } else {
+      toast(r.message || 'Already up to date');
+      btn.disabled = false; btn.textContent = 'Catch up';
+    }
+  } catch (e) {
+    toast('Catchup failed', 'err');
+    btn.disabled = false; btn.textContent = 'Catch up';
+  }
 }
 
 // ---------------------------------------------------------------------------
