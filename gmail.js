@@ -49,18 +49,17 @@ async function fetchEmailsForDate(tokenJson, date) {
 
   const gmail = google.gmail({ version: 'v1', auth: client });
 
-  // Build date range — Gmail uses YYYY/M/D format
+  // Build date range — Gmail uses YYYY/M/D format; use UTC to avoid local-time day shift
   const [y, m, d] = date.split('-').map(Number);
-  const next = new Date(date);
-  next.setDate(next.getDate() + 1);
+  const next = new Date(Date.UTC(y, m - 1, d + 1));
   const afterStr  = `${y}/${m}/${d}`;
-  const beforeStr = `${next.getFullYear()}/${next.getMonth() + 1}/${next.getDate()}`;
+  const beforeStr = `${next.getUTCFullYear()}/${next.getUTCMonth() + 1}/${next.getUTCDate()}`;
 
   const emails = [];
 
   for (const [direction, labelQuery] of [
-    ['received', `label:inbox after:${afterStr} before:${beforeStr}`],
-    ['sent',     `label:sent  after:${afterStr} before:${beforeStr}`],
+    ['received', `in:inbox after:${afterStr} before:${beforeStr}`],
+    ['sent',     `in:sent  after:${afterStr} before:${beforeStr}`],
   ]) {
     try {
       const list = await gmail.users.messages.list({
@@ -85,9 +84,14 @@ async function fetchEmailsForDate(tokenJson, date) {
           const subject = h('subject') || '(no subject)';
 
           if (contact) emails.push({ direction, contact, subject, snippet: detail.data.snippet || null });
-        } catch { /* skip individual message errors */ }
+        } catch (err) {
+          console.warn(`[gmail] message fetch error: ${err.message}`);
+        }
       }
-    } catch { /* skip if label inaccessible */ }
+    } catch (err) {
+      console.warn(`[gmail] list error (${direction}): ${err.message}`);
+      throw err; // re-throw so collect() can count it as an error
+    }
   }
 
   return { emails, refreshedTokens };
