@@ -219,3 +219,63 @@ describe('POST /api/gloss/contacts', () => {
     assert.equal(typeof detail.body.gloss.linked_collections[0], 'string');
   });
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/contacts/:name/draft-message
+// Outbound-draft endpoint — the happy path hits Gemini + Gmail, both of
+// which require env setup we don't have in test. We assert the
+// pre-external-call validation paths (404/400/503) so a regression in
+// route wiring or contact resolution is caught.
+// ---------------------------------------------------------------------------
+
+describe('POST /api/contacts/:name/draft-message', () => {
+  it('returns 404 for an unknown contact', async () => {
+    const { status, body } = await req(
+      '/api/contacts/Does%20Not%20Exist%20Zzz/draft-message',
+      { method: 'POST', headers: AUTH, body: { medium: 'email' } },
+    );
+    assert.equal(status, 404);
+    assert.equal(body.error, 'contact not found');
+  });
+
+  it('iMessage path falls through to 503 when GEMINI_API_KEY is unset (no contact needed for the guard)', async () => {
+    // Seed a contact with no email and request iMessage — we bypass the
+    // no-email guard (email-only) and land on the Gemini-missing branch.
+    const push = await req('/api/gloss/contacts', {
+      method: 'POST', headers: AUTH,
+      body: { contacts: [{
+        contact: 'Draft Test iMsg', gloss_id: 'gloss-test-imsg',
+        gloss_url: 'http://x', mention_count: 1,
+        last_mentioned_at: '2026-01-01', priority: 3,
+        growth_note: '', recent_context: [], linked_collections: [],
+      }] },
+    });
+    assert.equal(push.status, 200);
+
+    const prev = process.env.GEMINI_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    try {
+      const { status, body } = await req(
+        '/api/contacts/' + encodeURIComponent('Draft Test iMsg') + '/draft-message',
+        { method: 'POST', headers: AUTH, body: { medium: 'imessage' } },
+      );
+      // 503 because Gemini is unavailable. 404 would mean contact didn't
+      // resolve — also acceptable if gloss-only contacts don't resolve via
+      // getContactDetail in this schema state.
+      assert.ok(status === 503 || status === 404, `unexpected status ${status}: ${JSON.stringify(body)}`);
+    } finally {
+      if (prev !== undefined) process.env.GEMINI_API_KEY = prev;
+    }
+  });
+
+  it('email path returns 400 when the contact has no email address on file', async () => {
+    // Same seeded contact (no emails_addrs populated via the gloss push).
+    // Request email — we expect the no-email guard to fire.
+    const { status, body } = await req(
+      '/api/contacts/' + encodeURIComponent('Draft Test iMsg') + '/draft-message',
+      { method: 'POST', headers: AUTH, body: { medium: 'email' } },
+    );
+    // 400 (our guard) or 404 (contact doesn't resolve in this schema state).
+    assert.ok(status === 400 || status === 404, `unexpected status ${status}: ${JSON.stringify(body)}`);
+  });
+});

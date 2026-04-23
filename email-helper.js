@@ -155,6 +155,61 @@ function getOrBuildContactContext(db, senderEmail, senderName) {
 
 function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
 
+// ─── Outbound draft generator (check-in / new thread) ──────────────────────
+// Generates a cold-start outbound message body — used by the contact-page
+// "Draft a check-in" button. Shape of `ctx` mirrors getOrBuildContactContext
+// output so this reuses the same prompt-context framing as reply drafts.
+async function draftOutboundBody({ ctx, occasion, style = 'warm', medium = 'email' }) {
+  if (!process.env.GEMINI_API_KEY) return null;
+  const { GoogleGenAI } = require('@google/genai');
+  const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+  const contextBlock = [
+    ctx.contact_name ? `Recipient: ${ctx.contact_name} <${ctx.sender_email || ''}>` : `Recipient: ${ctx.sender_email || ctx.sender_name || 'unknown'}`,
+    ctx.gloss_profile?.growth_note ? `Gloss note about them: ${ctx.gloss_profile.growth_note}` : null,
+    ctx.gloss_profile?.linked_collections?.length ? `Gloss topics involving them: ${ctx.gloss_profile.linked_collections.slice(0, 5).join(', ')}` : null,
+    ctx.recent_emails?.length ? `Recent email history:\n${ctx.recent_emails.slice(0, 6).map(e => `  ${e.direction} ${e.date}: ${e.subject}`).join('\n')}` : null,
+    ctx.recent_messages?.length ? `Recent iMessages:\n${ctx.recent_messages.slice(0, 6).map(m => `  ${m.direction} ${m.sent_at}: ${m.text}`).join('\n')}` : null,
+  ].filter(Boolean).join('\n\n');
+
+  const styleGuide = style === 'formal'
+    ? 'Keep the tone formal and respectful; complete sentences, no lowercase starts.'
+    : style === 'direct'
+      ? 'Be direct and brief — get to the point in the first sentence. No small talk.'
+      : "Warm, short, in Nathan's voice: lowercase starts are fine, plain words, no corporate preamble, no emojis.";
+
+  const mediumGuide = medium === 'imessage'
+    ? 'Target medium: iMessage. Keep it very short (1–3 sentences). No subject line.'
+    : 'Target medium: email. Body only — user fills the subject. 2–5 short paragraphs max.';
+
+  const prompt = `You are drafting an outbound message for Nathan Colestock to send. He will review and edit before sending — never send or assume you're right.
+
+${styleGuide}
+${mediumGuide}
+
+Occasion / reason for reaching out: ${occasion || '(general check-in, no specific occasion)'}
+
+Reference specifics from the prior context when relevant. When uncertain about a fact or commitment, use a placeholder like [confirm date] rather than guessing.
+
+== Context about the recipient ==
+${contextBlock || '(no prior context in the suite)'}
+
+== Your outbound message ==
+Write only the body. No greeting like "Dear X" unless the relationship calls for it. Sign with just "Nathan" or nothing.`;
+
+  try {
+    const response = await genai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: { temperature: 0.55, maxOutputTokens: 600 },
+    });
+    return (response.text || '').trim() || null;
+  } catch (err) {
+    console.warn('[email-helper] outbound draft failed:', err.message);
+    return null;
+  }
+}
+
 // ─── Draft generator ────────────────────────────────────────────────────────
 // Uses Gemini (via google GenAI SDK already in the dep graph from
 // gloss-style apps — falls back gracefully if SDK/key is missing).
@@ -310,6 +365,6 @@ async function runEmailHelper({ db, getGmailAccountsWithTokens, saveGmailTokens 
 }
 
 module.exports = {
-  classifyEmail, getOrBuildContactContext, draftReplyBody,
+  classifyEmail, getOrBuildContactContext, draftReplyBody, draftOutboundBody,
   runForAccount, runEmailHelper,
 };

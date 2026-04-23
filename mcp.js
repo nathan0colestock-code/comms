@@ -5,7 +5,7 @@ const { McpServer }         = require('@modelcontextprotocol/sdk/server/mcp.js')
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const { z }                 = require('zod');
 const Database              = require('better-sqlite3');
-const { DB_PATH }           = require('./collect');
+const { DB_PATH, getNudges, getContactDetail } = require('./collect');
 
 const server = new McpServer({ name: 'comms', version: '0.1.0' });
 
@@ -79,6 +79,33 @@ server.tool(
   handleSearchByTopic,
 );
 
+// Nudges — relationships the user should reach out to soon. Wraps the same
+// helper that feeds the contact-list sidebar; read-only.
+function handleGetNudges() {
+  return { content: [{ type: 'text', text: JSON.stringify(getNudges(), null, 2) }] };
+}
+
+server.tool(
+  'get_nudges',
+  "Get the suggested outreach nudges (contacts to reach out to, with reasons).",
+  {},
+  handleGetNudges,
+);
+
+// Contact detail — everything comms knows about one person: recent
+// messages + emails, calendar events, gloss profile, special dates.
+function handleGetContactDetail({ name }) {
+  const detail = getContactDetail(name);
+  return { content: [{ type: 'text', text: JSON.stringify(detail, null, 2) }] };
+}
+
+server.tool(
+  'get_contact_detail',
+  'Get the full comms profile for one contact: recent messages, emails, calendar events, gloss profile, special dates.',
+  { name: z.string().min(1).describe('Contact display name or identifier') },
+  handleGetContactDetail,
+);
+
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
@@ -91,5 +118,5 @@ if (require.main === module) {
     process.exit(1);
   });
 } else {
-  module.exports = { handleSearchByContact, handleSearchByTopic };
+  module.exports = { handleSearchByContact, handleSearchByTopic, handleGetNudges, handleGetContactDetail };
 }

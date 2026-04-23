@@ -554,6 +554,90 @@ app.delete('/api/special-dates/:id', (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Outbound draft — save to Gmail Drafts (or return body for iMessage) ────
+// POST /api/contacts/:name/draft-message
+// Body: { occasion?: string, style?: 'warm'|'direct'|'formal', medium: 'email'|'imessage' }
+// Resolves the contact, reuses email-helper's getOrBuildContactContext (so
+// context stays consistent with reply drafts), calls Gemini for the body,
+// then either drafts it in Gmail (email) or returns it for client-side
+// handoff (iMessage — comms can't send those directly).
+app.post('/api/contacts/:name/draft-message', async (req, res) => {
+  const { name } = req.params;
+  const occasion = typeof req.body?.occasion === 'string' ? req.body.occasion.slice(0, 400) : '';
+  const style = ['warm', 'direct', 'formal'].includes(req.body?.style) ? req.body.style : 'warm';
+  const medium = req.body?.medium === 'imessage' ? 'imessage' : 'email';
+
+  try {
+    const detail = getContactDetail(name);
+    // getContactDetail always echoes back the name, so "not found" means no
+    // linked person AND no comms history under that name.
+    const hasAny = detail && (
+      detail.person_id
+      || (detail.stats?.message_count || 0) > 0
+      || (detail.stats?.email_count || 0) > 0
+      || (detail.emails_addrs || []).length > 0
+      || detail.gloss
+    );
+    if (!hasAny) {
+      return res.status(404).json({ error: 'contact not found' });
+    }
+
+    // Pick primary email — first address from emails_addrs (most recently seen).
+    const primaryEmail = (detail.emails_addrs || []).find(Boolean) || null;
+    if (medium === 'email' && !primaryEmail) {
+      return res.status(400).json({ error: 'no email address on file for this contact' });
+    }
+
+    // Build context using email-helper's cached path. Open a dedicated db
+    // handle so we don't fight the collect.js per-call open/close model.
+    const Database = require('better-sqlite3');
+    const { getOrBuildContactContext, draftOutboundBody } = require('./email-helper');
+    const db = new Database(DB_PATH);
+    let ctx;
+    try {
+      ctx = getOrBuildContactContext(db, primaryEmail || '', name);
+      ctx.contact_name = ctx.contact_name || name;
+      ctx.sender_name = ctx.sender_name || name;
+      if (!ctx.sender_email && primaryEmail) ctx.sender_email = primaryEmail;
+    } finally {
+      db.close();
+    }
+
+    const body = await draftOutboundBody({ ctx, occasion, style, medium });
+    if (!body) {
+      return res.status(503).json({ error: 'draft generation unavailable (no GEMINI_API_KEY or model error)' });
+    }
+
+    if (medium === 'imessage') {
+      return res.json({ body, medium, contact: name });
+    }
+
+    // Email path: find a Gmail account authed with gmail.modify. Prefer the
+    // first scoped account — Nathan typically has one primary Gmail on file.
+    const accounts = getGmailAccountsWithTokens().filter(a =>
+      hasScope(a.token_json, 'https://www.googleapis.com/auth/gmail.modify'));
+    if (!accounts.length) {
+      return res.status(503).json({ error: 'no Gmail account with modify scope' });
+    }
+    const acct = accounts[0];
+    const { gmailClientFor, createDraftReply } = require('./gmail');
+    const { gmail, refreshed } = gmailClientFor(acct.token_json);
+    // Outbound: no inReplyTo/references, blank subject (space so createDraftReply
+    // doesn't prepend "Re: "). The user fills in the real subject in Gmail.
+    const draft = await createDraftReply(gmail, {
+      threadId: undefined, to: primaryEmail, subject: ' ', body,
+      inReplyTo: undefined, references: undefined,
+    });
+    if (refreshed?.value) {
+      try { saveGmailTokens(acct.email, { ...JSON.parse(acct.token_json), ...refreshed.value }); } catch {}
+    }
+    res.json({ draft_id: draft.draftId, body, medium, contact: name });
+  } catch (e) {
+    console.error('[draft-message]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── Message template ────────────────────────────────────────────────────────
 app.post('/api/contacts/:name/message-template', async (req, res) => {
   const { name } = req.params;
