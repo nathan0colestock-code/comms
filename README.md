@@ -1,3 +1,4 @@
+<!-- This project is orchestrated by Maestro. -->
 # Comm's
 
 Comm's collects your daily iMessages and Gmail into a local SQLite database that your other personal apps can query. It runs as a lightweight background server on your Mac and exposes a dashboard for browsing history and triggering collection.
