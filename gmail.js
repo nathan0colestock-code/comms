@@ -4,14 +4,26 @@
 
 const { google } = require('googleapis');
 
-const REDIRECT_URI = `http://localhost:${process.env.PORT || 3748}/api/gmail/callback`;
-const SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
+// Redirect URI honours PUBLIC_ORIGIN so the same code works in dev + on Fly.
+function redirectUri() {
+  const origin = process.env.PUBLIC_ORIGIN || `http://localhost:${process.env.PORT || 3748}`;
+  return `${origin.replace(/\/+$/, '')}/api/gmail/callback`;
+}
+
+// Gmail (read-only) plus Calendar (read-only). Google will ask the user to
+// approve both at once on first connect. Existing accounts with gmail-only
+// scope keep working; they just won't surface in calendar views until they
+// reconnect.
+const SCOPES = [
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/calendar.readonly',
+];
 
 function makeClient() {
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
-    REDIRECT_URI,
+    redirectUri(),
   );
 }
 
@@ -23,6 +35,14 @@ function getAuthUrl(loginHint) {
     login_hint: loginHint || undefined,
     prompt: 'consent',
   });
+}
+
+function hasScope(tokenJson, scope) {
+  try {
+    const t = typeof tokenJson === 'string' ? JSON.parse(tokenJson) : tokenJson;
+    const s = t?.scope || '';
+    return s.split(/\s+/).includes(scope);
+  } catch { return false; }
 }
 
 async function exchangeCode(code) {
@@ -110,4 +130,4 @@ function extractEmail(raw) {
   return (m ? m[1] : raw.trim()).toLowerCase();
 }
 
-module.exports = { getAuthUrl, exchangeCode, getAccountEmail, fetchEmailsForDate, parseContact, extractEmail };
+module.exports = { getAuthUrl, exchangeCode, getAccountEmail, fetchEmailsForDate, parseContact, extractEmail, hasScope };

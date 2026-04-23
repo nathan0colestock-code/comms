@@ -1,0 +1,43 @@
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Node
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Local data — chat.db / AddressBook are host-only; comms.db lives on the Fly volume
+data
+
+# Secrets / local env
+.env
+.env.*
+
+# Tests and install scripts
+test
+install.sh
+
+# Docs
+README.md
+*.md
+
+# Editor / OS junk
+.DS_Store
+.vscode
+.idea
+
+# Coverage / packaged artifacts
+coverage
+*.tgz
+
+# Claude tooling
+.claude
+
+# Docker files themselves don't need to be in the image
+Dockerfile
+.dockerignore
+fly.toml
