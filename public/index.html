@@ -1,0 +1,1285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Comm's</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0f1117; --surface: #1a1d27; --surface-2: #232631; --border: #2a2d3a;
+  --text: #e2e4ec; --text-dim: #b5b8c5; --muted: #6b7080; --accent: #7c9ef8;
+  --green: #4caf7d; --red: #e05c5c; --yellow: #d4a84b; --gold: #e3b94b;
+  --radius: 10px;
+  font-size: 14px;
+}
+html, body { height: 100dvh; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  display: flex; flex-direction: column; overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+
+/* ─── Header ─────────────────────────────────────────────────────────── */
+header.topbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 18px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0; background: var(--bg);
+  padding-top: max(10px, env(safe-area-inset-top));
+}
+.brand { font-size: 15px; font-weight: 700; letter-spacing: 0.01em; }
+.brand .dot { color: var(--accent); }
+.search-wrap { flex: 1; max-width: 520px; position: relative; }
+.search-wrap input {
+  width: 100%; padding: 7px 12px 7px 32px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font: inherit;
+}
+.search-wrap input::placeholder { color: var(--muted); }
+.search-wrap::before {
+  content: "⌕"; position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--muted); font-size: 14px; pointer-events: none;
+}
+.topbar-actions { display: flex; gap: 6px; align-items: center; }
+.icon-btn {
+  width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center;
+  color: var(--text-dim); background: transparent; border: 1px solid transparent;
+}
+.icon-btn:hover { background: var(--surface); color: var(--text); }
+
+/* ─── Layout ─────────────────────────────────────────────────────────── */
+.layout { display: flex; flex: 1; min-height: 0; }
+aside.sidebar {
+  width: 220px; flex-shrink: 0; border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; background: var(--bg);
+}
+nav.nav { padding: 10px 10px 6px; display: flex; flex-direction: column; gap: 2px; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 8px; color: var(--text-dim);
+  font-weight: 500; font-size: 13px; cursor: pointer; border: none;
+  background: none; width: 100%; text-align: left;
+}
+.nav-item:hover { background: var(--surface); color: var(--text); }
+.nav-item.active { background: var(--surface-2); color: var(--text); }
+.nav-item .ico { width: 18px; text-align: center; font-size: 15px; opacity: 0.9; }
+.nav-item .count { margin-left: auto; font-size: 11px; color: var(--muted); font-weight: 600; }
+.nav-item.has-nudges::after {
+  content: ""; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--red); margin-left: auto;
+}
+
+.nudges-section {
+  margin-top: auto; padding: 10px; border-top: 1px solid var(--border);
+  max-height: 45%; display: flex; flex-direction: column; gap: 6px; overflow: hidden;
+}
+.nudges-section .section-label {
+  font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--muted); font-weight: 700; padding: 0 4px;
+}
+.nudges-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
+.nudge {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; font-size: 12px; cursor: pointer;
+}
+.nudge:hover { border-color: var(--accent); }
+.nudge .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.nudge .days { font-size: 11px; color: var(--red); font-weight: 600; flex-shrink: 0; }
+.nudge .dismiss { color: var(--muted); padding: 0 2px; line-height: 1; }
+.nudge .dismiss:hover { color: var(--red); }
+.nudges-empty { font-size: 11px; color: var(--muted); padding: 4px 4px 8px; }
+
+/* ─── Main content area ──────────────────────────────────────────────── */
+main.view {
+  flex: 1; min-width: 0; display: flex; min-height: 0;
+}
+.view-section { display: none; flex: 1; min-width: 0; }
+.view-section.active { display: flex; }
+
+/* ─── Contacts view — two-pane ───────────────────────────────────────── */
+.pane-list {
+  width: 320px; flex-shrink: 0; border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+}
+.pane-list-header {
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted); font-weight: 700;
+}
+.pane-list-header .count { font-weight: 600; }
+.pane-list-body { flex: 1; overflow-y: auto; }
+
+.contact-row {
+  padding: 10px 14px; border-left: 3px solid transparent;
+  cursor: pointer; display: flex; align-items: center; gap: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.contact-row:hover { background: var(--surface); }
+.contact-row.active { background: var(--surface); border-left-color: var(--accent); }
+.contact-row .avatar {
+  width: 32px; height: 32px; border-radius: 50%; background: var(--surface-2);
+  display: grid; place-items: center; font-weight: 600; font-size: 13px;
+  color: var(--text-dim); flex-shrink: 0;
+}
+.contact-row .avatar.priority { background: linear-gradient(135deg, var(--gold), #d49a2a); color: #1a1500; }
+.contact-row .main { flex: 1; min-width: 0; }
+.contact-row .name { font-weight: 500; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.contact-row .name .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+.contact-row .meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.contact-row .stars { color: var(--gold); font-size: 11px; flex-shrink: 0; }
+.contact-row .nudge-pill {
+  font-size: 10px; background: #3d1e1e; color: var(--red);
+  border-radius: 999px; padding: 1px 7px; font-weight: 600; flex-shrink: 0;
+}
+
+.pane-detail { flex: 1; overflow-y: auto; padding: 28px 32px; min-width: 0; }
+.pane-detail .empty-state { color: var(--muted); padding-top: 80px; text-align: center; font-size: 13px; }
+
+.profile-header { display: flex; align-items: flex-start; gap: 18px; margin-bottom: 10px; flex-wrap: wrap; }
+.profile-header .big-avatar {
+  width: 56px; height: 56px; border-radius: 50%; background: var(--surface-2);
+  display: grid; place-items: center; font-weight: 600; font-size: 22px; color: var(--text-dim);
+  flex-shrink: 0;
+}
+.profile-header .big-avatar.priority { background: linear-gradient(135deg, var(--gold), #d49a2a); color: #1a1500; }
+.profile-header h1 {
+  font-size: 22px; font-weight: 700; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.profile-header h1 .stars { color: var(--gold); font-size: 16px; }
+.profile-header .meta { color: var(--muted); font-size: 12px; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
+.profile-header .actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+
+.btn {
+  background: var(--accent); color: #fff; border: none;
+  padding: 7px 14px; border-radius: 8px; font-size: 12px; font-weight: 500;
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+}
+.btn:not(:disabled):hover { filter: brightness(1.1); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn.ghost { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+.btn.ghost:hover { border-color: var(--accent); color: var(--accent); filter: none; }
+.btn.small { padding: 4px 10px; font-size: 11px; }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px;
+}
+.card h3 {
+  font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted); font-weight: 700; margin-bottom: 10px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.card h3 .timestamp { font-size: 10px; font-weight: 500; text-transform: none; letter-spacing: 0; }
+
+.stat-row { display: flex; gap: 20px; flex-wrap: wrap; }
+.stat { font-size: 13px; }
+.stat b { font-size: 18px; font-weight: 600; display: block; color: var(--text); line-height: 1.2; }
+.stat span { color: var(--muted); font-size: 11px; }
+
+.growth-note {
+  background: #1e2510; border: 1px solid #2f3e1a; color: #c8e09a;
+  padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.55;
+}
+.growth-note .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #8ba668; font-weight: 700; margin-bottom: 4px; }
+
+.collections-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chip {
+  font-size: 11px; padding: 3px 10px; border-radius: 999px;
+  background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--border);
+}
+
+.context-list { display: flex; flex-direction: column; gap: 10px; }
+.context-item { font-size: 13px; line-height: 1.5; padding-left: 12px; border-left: 2px solid var(--border); }
+.context-item .date { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+.context-item .summary { color: var(--text-dim); }
+.context-item .coll { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+.insight-body { font-size: 14px; line-height: 1.6; color: var(--text); white-space: pre-wrap; }
+.insight-empty { color: var(--muted); font-size: 13px; font-style: italic; }
+
+.event-list-compact { display: flex; flex-direction: column; gap: 6px; }
+.event-row {
+  display: flex; align-items: baseline; gap: 10px; padding: 8px 0;
+  border-bottom: 1px solid var(--border); font-size: 13px; cursor: pointer;
+}
+.event-row:last-child { border-bottom: none; }
+.event-row:hover { background: var(--surface-2); margin: 0 -18px; padding-left: 18px; padding-right: 18px; border-radius: 6px; }
+.event-row .when { color: var(--muted); font-size: 12px; width: 100px; flex-shrink: 0; }
+.event-row .title { font-weight: 500; }
+
+.recent-comms .msg-thread { margin-bottom: 16px; }
+.thread-label {
+  font-size: 11px; color: var(--muted); font-weight: 600; margin-bottom: 6px;
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.msg-bubble { display: flex; gap: 8px; margin-bottom: 3px; font-size: 13px; }
+.msg-bubble.sent { flex-direction: row-reverse; }
+.msg-bubble .ts { font-size: 10px; color: var(--muted); padding-top: 5px; min-width: 56px; flex-shrink: 0; }
+.msg-bubble .txt {
+  padding: 6px 11px; border-radius: 14px; background: var(--surface-2);
+  border: 1px solid var(--border); max-width: 75%; line-height: 1.5; word-break: break-word;
+}
+.msg-bubble.sent .ts { text-align: left; }
+.msg-bubble.sent .txt { background: #1d2d4a; border-color: #2a3f6a; }
+
+.email-row-compact {
+  display: flex; align-items: baseline; gap: 10px; padding: 8px 0;
+  border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap;
+}
+.email-row-compact:last-child { border-bottom: none; }
+.email-row-compact .dir { font-weight: 700; flex-shrink: 0; width: 12px; }
+.email-row-compact .dir.received { color: var(--green); }
+.email-row-compact .dir.sent { color: var(--accent); }
+.email-row-compact .date-col { color: var(--muted); font-size: 11px; width: 72px; flex-shrink: 0; }
+.email-row-compact .subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.email-row-compact .snippet { flex-basis: 100%; color: var(--muted); font-size: 12px; padding-left: 86px; margin-top: 2px; }
+
+/* ─── Calendar view ──────────────────────────────────────────────────── */
+.calendar-list { flex: 1; overflow-y: auto; padding: 20px 28px 60px; max-width: 820px; width: 100%; margin: 0 auto; }
+.day-group { margin-bottom: 22px; }
+.day-group h2 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); font-weight: 700; padding-bottom: 6px; border-bottom: 1px solid var(--border); margin-bottom: 10px;
+}
+.day-group h2 .today { color: var(--accent); margin-left: 8px; }
+.event-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 16px; margin-bottom: 10px;
+  cursor: pointer; transition: border-color 120ms;
+}
+.event-card:hover { border-color: var(--accent); }
+.event-card .top { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; flex-wrap: wrap; }
+.event-card .time { color: var(--muted); font-size: 12px; flex-shrink: 0; }
+.event-card .title { font-weight: 600; flex: 1; min-width: 0; }
+.event-card .loc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.event-card .attendees { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.event-card .att-chip {
+  font-size: 11px; padding: 2px 10px; border-radius: 999px;
+  background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--border);
+}
+.event-card .att-chip.known { background: #1e2d3d; color: #9bc3e8; border-color: #2a4158; }
+.event-card .brief-badge {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  background: #1e2d1e; color: var(--green); padding: 2px 7px; border-radius: 999px;
+  font-weight: 700; margin-left: 6px;
+}
+
+.event-detail { padding: 20px 28px 60px; max-width: 820px; width: 100%; margin: 0 auto; }
+.event-detail .back { color: var(--muted); font-size: 12px; margin-bottom: 12px; display: inline-block; }
+.event-detail .back:hover { color: var(--accent); }
+.event-detail h1 { font-size: 22px; margin-bottom: 6px; }
+.event-detail .details-meta { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+.event-detail .details-meta span { margin-right: 16px; }
+
+.brief-body { font-size: 14px; line-height: 1.7; }
+.brief-body h2 {
+  font-size: 14px; margin-top: 18px; margin-bottom: 8px; color: var(--text);
+  padding-bottom: 4px; border-bottom: 1px solid var(--border);
+}
+.brief-body h2:first-child { margin-top: 0; }
+.brief-body ul { margin-left: 22px; }
+.brief-body li { margin-bottom: 4px; }
+.brief-body p { margin-bottom: 10px; }
+
+.attendee-row {
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px;
+}
+.attendee-row:last-child { border-bottom: none; }
+.attendee-row .ico { width: 32px; height: 32px; border-radius: 50%; background: var(--surface-2); display: grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--text-dim); }
+.attendee-row .info { flex: 1; min-width: 0; }
+.attendee-row .info .name { font-weight: 500; }
+.attendee-row .info .email { color: var(--muted); font-size: 11px; }
+
+/* ─── Daily view ─────────────────────────────────────────────────────── */
+#view-daily { flex-direction: row; }
+.daily-list { width: 220px; flex-shrink: 0; border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+.daily-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.daily-toolbar .label { flex: 1; font-size: 11px; color: var(--muted); text-transform: uppercase; font-weight: 700; letter-spacing: 0.06em; }
+.daily-runs { flex: 1; overflow-y: auto; padding: 6px 0; }
+.daily-row {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+  cursor: pointer; border-left: 3px solid transparent; font-size: 13px;
+}
+.daily-row:hover { background: var(--surface); }
+.daily-row.active { background: var(--surface); border-left-color: var(--accent); }
+.daily-row .dow { font-size: 11px; color: var(--muted); min-width: 26px; }
+.daily-row .date { flex: 1; font-weight: 500; }
+.daily-badge { font-size: 10px; padding: 2px 6px; border-radius: 999px; font-weight: 600; }
+.daily-badge.done { background: #1e3d2a; color: var(--green); }
+.daily-badge.running { background: #2a2a1e; color: var(--yellow); animation: pulse 1.2s infinite; }
+.daily-badge.error { background: #3d1e1e; color: var(--red); }
+.daily-badge.empty { background: var(--border); color: var(--muted); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+.daily-detail { flex: 1; overflow-y: auto; padding: 22px 28px; min-width: 0; }
+
+/* ─── Modal ──────────────────────────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50;
+  display: none; align-items: center; justify-content: center; padding: 20px;
+}
+.modal-backdrop.show { display: flex; }
+.modal {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 22px; min-width: 280px; max-width: 420px; width: 100%;
+}
+.modal h2 { font-size: 16px; margin-bottom: 12px; }
+.modal-actions { display: flex; gap: 8px; margin-top: 14px; justify-content: flex-end; }
+
+/* ─── Toast ──────────────────────────────────────────────────────────── */
+.toast {
+  position: fixed; bottom: calc(20px + env(safe-area-inset-bottom)); right: 20px; z-index: 100;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 16px; font-size: 13px; opacity: 0; transition: opacity 0.2s;
+  pointer-events: none; max-width: calc(100vw - 40px);
+}
+.toast.show { opacity: 1; }
+.toast.ok { border-color: var(--green); }
+.toast.err { border-color: var(--red); color: var(--red); }
+
+/* ─── Mobile ─────────────────────────────────────────────────────────── */
+@media (max-width: 780px) {
+  header.topbar { padding: 10px 14px; padding-top: max(10px, env(safe-area-inset-top)); gap: 8px; }
+  .brand { font-size: 14px; }
+  .search-wrap { max-width: none; }
+
+  .layout { flex-direction: column-reverse; }
+  aside.sidebar {
+    width: 100%; flex-direction: row; border-right: none; border-top: 1px solid var(--border);
+    height: auto; flex-shrink: 0; padding-bottom: env(safe-area-inset-bottom);
+  }
+  nav.nav { flex-direction: row; padding: 6px; flex: 1; gap: 2px; }
+  .nav-item { flex: 1; justify-content: center; padding: 10px 6px; font-size: 11px; }
+  .nav-item .count { display: none; }
+  .nudges-section { display: none; } /* accessible via contacts tab on mobile */
+
+  main.view { flex-direction: column; }
+
+  /* Contacts: mobile = list-only, or detail-only when a contact is selected */
+  #view-contacts { flex-direction: column; }
+  .pane-list { width: 100%; border-right: none; }
+  .pane-detail { display: none; padding: 18px; }
+  body.detail-open .pane-list { display: none; }
+  body.detail-open .pane-detail { display: block; }
+
+  .profile-header .actions { margin-left: 0; width: 100%; }
+  .profile-header h1 { font-size: 18px; }
+
+  #view-daily { flex-direction: column; }
+  .daily-list { width: 100%; border-right: none; border-bottom: 1px solid var(--border); max-height: 35vh; }
+  .daily-detail { padding: 16px; }
+
+  .calendar-list, .event-detail { padding: 14px 16px 60px; }
+}
+
+.back-link-btn {
+  display: none; margin-bottom: 10px; font-size: 12px;
+  color: var(--muted); padding: 2px 0;
+}
+.back-link-btn:hover { color: var(--accent); }
+@media (max-width: 780px) { body.detail-open .back-link-btn { display: inline-block; } }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">Comm's<span class="dot">.</span></div>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search contacts, messages, emails…" autocomplete="off">
+  </div>
+  <div class="topbar-actions">
+    <button class="icon-btn" id="settings-btn" title="Settings">⚙</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <nav class="nav">
+      <button class="nav-item active" data-view="contacts"><span class="ico">◉</span>Contacts<span class="count" id="count-contacts"></span></button>
+      <button class="nav-item" data-view="calendar"><span class="ico">▤</span>Calendar<span class="count" id="count-calendar"></span></button>
+      <button class="nav-item" data-view="daily"><span class="ico">☰</span>Daily</button>
+    </nav>
+    <section class="nudges-section">
+      <div class="section-label">Nudges</div>
+      <div class="nudges-list" id="nudges-list"></div>
+    </section>
+  </aside>
+
+  <main class="view">
+    <!-- Contacts view -->
+    <section id="view-contacts" class="view-section active">
+      <div class="pane-list">
+        <div class="pane-list-header">
+          <span>People</span>
+          <span class="count" id="contact-count"></span>
+        </div>
+        <div class="pane-list-body" id="contact-list">
+          <div style="padding:16px;color:var(--muted);font-size:12px">Loading…</div>
+        </div>
+      </div>
+      <div class="pane-detail" id="contact-detail">
+        <button class="back-link-btn" onclick="closeContactDetail()">← Back</button>
+        <div class="empty-state">Select a contact to see details.</div>
+      </div>
+    </section>
+
+    <!-- Calendar view -->
+    <section id="view-calendar" class="view-section">
+      <div class="calendar-list" id="calendar-body">
+        <div style="padding:40px 0;color:var(--muted);text-align:center;font-size:13px">Loading…</div>
+      </div>
+    </section>
+
+    <!-- Daily view -->
+    <section id="view-daily" class="view-section">
+      <div class="daily-list">
+        <div class="daily-toolbar">
+          <span class="label">Runs</span>
+          <button class="btn ghost small" id="catchup-btn" onclick="catchUp()" title="Collect all days since last run">Catch up</button>
+          <button class="btn small" onclick="collectToday()">Today</button>
+        </div>
+        <div class="daily-runs" id="daily-runs"></div>
+      </div>
+      <div class="daily-detail" id="daily-detail">
+        <div class="empty-state" style="color:var(--muted);text-align:center;padding-top:80px;font-size:13px">Select a day.</div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- Settings modal -->
+<div class="modal-backdrop" id="settings-modal" onclick="if(event.target===this)closeModal('settings-modal')">
+  <div class="modal">
+    <h2>Settings</h2>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.06em;font-weight:700">Connected accounts</h2>
+    <div id="accounts-list" style="margin-bottom:14px"></div>
+    <button class="btn ghost small" onclick="addGmail()">+ Connect Gmail / Calendar</button>
+    <div style="border-top:1px solid var(--border);margin:18px 0 12px"></div>
+    <button class="btn ghost small" onclick="pollCalendarNow()">Sync calendar now</button>
+    <div class="modal-actions">
+      <form method="POST" action="/api/logout" style="display:inline">
+        <button class="btn ghost small" type="submit">Sign out</button>
+      </form>
+      <button class="btn small" onclick="closeModal('settings-modal')">Done</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════════════════════════
+const state = {
+  view: 'contacts',
+  contacts: [],
+  filteredContacts: [],
+  selectedContact: null,
+  contactDetail: null,
+  nudges: [],
+  events: [],
+  selectedEventId: null,
+  runs: [],
+  selectedRun: null,
+  runDetail: null,
+  searchTerm: '',
+  pollTimer: null,
+  runsPollTimer: null,
+};
+
+const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Utils
+// ═══════════════════════════════════════════════════════════════════════════
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(json.error || `HTTP ${r.status}`);
+  return json;
+}
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function toast(msg, kind = 'ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + kind;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.className = 'toast'; }, 3200);
+}
+function initials(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+function priorityStars(p) {
+  if (!p || p < 1) return '';
+  return '★'.repeat(Math.min(p, 3));
+}
+function stars(p) { return priorityStars(p); }
+function daysAgo(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr + (dateStr.length === 10 ? 'T12:00:00' : ''));
+  const diff = Math.floor((Date.now() - d.getTime()) / 86400000);
+  if (diff === 0) return 'today';
+  if (diff === 1) return 'yesterday';
+  if (diff < 7) return diff + 'd ago';
+  if (diff < 30) return Math.floor(diff / 7) + 'w ago';
+  if (diff < 365) return Math.floor(diff / 30) + 'mo ago';
+  return Math.floor(diff / 365) + 'y ago';
+}
+function localDateStr(d = new Date()) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function formatTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+function formatDay(ymd) {
+  if (!ymd) return '';
+  const d = new Date(ymd + 'T12:00:00');
+  return d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+}
+
+// Lightweight markdown → HTML (headings, lists, bold, paragraphs)
+function renderMd(md) {
+  if (!md) return '';
+  const lines = String(md).split(/\r?\n/);
+  let html = '';
+  let inList = false;
+  const closeList = () => { if (inList) { html += '</ul>'; inList = false; } };
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (/^##\s+/.test(line)) { closeList(); html += `<h2>${esc(line.replace(/^##\s+/, ''))}</h2>`; continue; }
+    if (/^#\s+/.test(line))  { closeList(); html += `<h2>${esc(line.replace(/^#\s+/, ''))}</h2>`; continue; }
+    if (/^[-*]\s+/.test(line)) {
+      if (!inList) { html += '<ul>'; inList = true; }
+      html += `<li>${inline(line.replace(/^[-*]\s+/, ''))}</li>`;
+      continue;
+    }
+    closeList();
+    if (!line) { html += ''; continue; }
+    html += `<p>${inline(line)}</p>`;
+  }
+  closeList();
+  return html;
+  function inline(s) {
+    return esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\*(.+?)\*/g, '<i>$1</i>');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// View routing
+// ═══════════════════════════════════════════════════════════════════════════
+function setView(name) {
+  state.view = name;
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === name));
+  document.querySelectorAll('.view-section').forEach(el => el.classList.toggle('active', el.id === 'view-' + name));
+  document.body.classList.remove('detail-open');
+  if (name === 'contacts') { loadContacts(); }
+  else if (name === 'calendar') { loadCalendar(); }
+  else if (name === 'daily') { loadDaily(); }
+  location.hash = '#/' + name;
+}
+document.querySelectorAll('.nav-item').forEach(el => {
+  el.addEventListener('click', () => setView(el.dataset.view));
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Contacts
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadContacts() {
+  try {
+    const { contacts } = await api('/api/contacts');
+    state.contacts = contacts;
+    renderContacts();
+    document.getElementById('count-contacts').textContent = contacts.length;
+  } catch (e) { toast('Load failed: ' + e.message, 'err'); }
+  loadNudges();
+}
+
+function renderContacts() {
+  const q = state.searchTerm.toLowerCase();
+  const list = q
+    ? state.contacts.filter(c => c.contact.toLowerCase().includes(q) ||
+        (c.gloss?.aliases || []).some(a => a.toLowerCase().includes(q)))
+    : state.contacts;
+  state.filteredContacts = list;
+  document.getElementById('contact-count').textContent = list.length;
+
+  const nudgeSet = new Set(state.nudges.map(n => n.contact.toLowerCase()));
+  const el = document.getElementById('contact-list');
+  if (!list.length) {
+    el.innerHTML = '<div style="padding:20px;color:var(--muted);font-size:12px;text-align:center">No contacts yet.</div>';
+    return;
+  }
+  el.innerHTML = list.map(c => {
+    const active = c.contact === state.selectedContact ? 'active' : '';
+    const hasGloss = !!c.gloss;
+    const prio = c.gloss?.priority || 0;
+    const avatarCls = prio > 0 ? 'avatar priority' : 'avatar';
+    const last = c.last_contact_date ? daysAgo(c.last_contact_date) : 'never';
+    const nudgeBadge = nudgeSet.has(c.contact.toLowerCase()) ? '<span class="nudge-pill">nudge</span>' : '';
+    const starStr = prio ? `<span class="stars">${stars(prio)}</span>` : '';
+    const glossDot = hasGloss && !prio ? '<span class="dot" title="In notebook"></span>' : '';
+    return `<div class="contact-row ${active}" onclick="selectContact('${esc(c.contact).replace(/'/g,"\\'")}')">
+      <div class="${avatarCls}">${esc(initials(c.contact))}</div>
+      <div class="main">
+        <div class="name">${glossDot}${esc(c.contact)} ${starStr}</div>
+        <div class="meta">${c.message_count + c.email_count} msg · ${last}</div>
+      </div>
+      ${nudgeBadge}
+    </div>`;
+  }).join('');
+}
+
+async function selectContact(name) {
+  state.selectedContact = name;
+  document.body.classList.add('detail-open');
+  renderContacts();
+  const el = document.getElementById('contact-detail');
+  el.innerHTML = '<button class="back-link-btn" onclick="closeContactDetail()">← Back</button><div class="empty-state">Loading…</div>';
+  try {
+    const detail = await api('/api/contacts/' + encodeURIComponent(name));
+    state.contactDetail = detail;
+    renderContactDetail();
+  } catch (e) {
+    el.innerHTML = '<button class="back-link-btn" onclick="closeContactDetail()">← Back</button><div class="empty-state">' + esc(e.message) + '</div>';
+  }
+}
+
+function closeContactDetail() {
+  state.selectedContact = null;
+  state.contactDetail = null;
+  document.body.classList.remove('detail-open');
+  renderContacts();
+  document.getElementById('contact-detail').innerHTML =
+    '<button class="back-link-btn" onclick="closeContactDetail()">← Back</button><div class="empty-state">Select a contact to see details.</div>';
+}
+
+function renderContactDetail() {
+  const d = state.contactDetail;
+  if (!d) return;
+  const g = d.gloss;
+  const s = d.stats || {};
+  const prio = g?.priority || 0;
+  const avatarCls = prio > 0 ? 'big-avatar priority' : 'big-avatar';
+
+  const handlesLine = [
+    ...d.handles.slice(0, 3),
+    ...d.emails_addrs.slice(0, 3),
+  ].filter(Boolean).map(esc).join(' · ');
+
+  let html = `<button class="back-link-btn" onclick="closeContactDetail()">← Back</button>
+  <div class="profile-header">
+    <div class="${avatarCls}">${esc(initials(d.contact))}</div>
+    <div>
+      <h1>${esc(d.contact)} ${prio ? `<span class="stars">${stars(prio)}</span>` : ''}</h1>
+      <div class="meta">
+        ${handlesLine ? `<span>${handlesLine}</span>` : ''}
+        ${s.first_contact_date ? `<span>since ${esc(s.first_contact_date)}</span>` : ''}
+      </div>
+    </div>
+    <div class="actions">
+      ${g ? `<a class="btn" href="${esc(g.gloss_url)}" target="_blank" rel="noopener">Open in Gloss →</a>` : ''}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stat-row">
+      <div class="stat"><b>${s.message_count || 0}</b><span>iMessages</span></div>
+      <div class="stat"><b>${s.email_count || 0}</b><span>Emails</span></div>
+      ${g ? `<div class="stat"><b>${g.mention_count || 0}</b><span>Notebook mentions</span></div>` : ''}
+      ${s.last_contact_date ? `<div class="stat"><b>${esc(daysAgo(s.last_contact_date))}</b><span>Last contact</span></div>` : ''}
+    </div>
+  </div>`;
+
+  // Gloss panel
+  if (g) {
+    html += `<div class="card">
+      <h3><span>From your notebook</span></h3>`;
+    if (g.growth_note) {
+      html += `<div class="growth-note" style="margin-bottom:14px"><div class="label">Growth note</div>${esc(g.growth_note)}</div>`;
+    }
+    if (g.recent_context && g.recent_context.length) {
+      html += `<div class="context-list">` + g.recent_context.map(c => `
+        <div class="context-item">
+          <div class="date">${esc(c.date || '')}</div>
+          <div class="summary">${esc(c.role_summary || '')}</div>
+          ${c.collection ? `<div class="coll">in ${esc(c.collection)}</div>` : ''}
+        </div>`).join('') + `</div>`;
+    }
+    if (g.linked_collections && g.linked_collections.length) {
+      html += `<div class="collections-list" style="margin-top:14px">` +
+        g.linked_collections.map(c => `<span class="chip">${esc(c)}</span>`).join('') + `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  // AI insight
+  html += `<div class="card">
+    <h3>
+      <span>AI Insight</span>
+      <span class="timestamp">${d.insight ? ('generated ' + esc(daysAgo(d.insight.generated_at))) : ''}</span>
+    </h3>
+    <div id="insight-body" class="insight-body">
+      ${d.insight
+        ? esc(d.insight.insight)
+        : '<div class="insight-empty">No insight yet.</div>'}
+    </div>
+    <div style="margin-top:12px">
+      <button class="btn ghost small" id="insight-btn" onclick="regenInsight()">
+        ${d.insight ? 'Regenerate' : 'Generate insight'}
+      </button>
+    </div>
+  </div>`;
+
+  // Recent comms — interleaved messages + emails
+  const msgs = d.messages || [];
+  const emails = d.emails || [];
+  if (msgs.length || emails.length) {
+    html += `<div class="card recent-comms">
+      <h3><span>Recent</span><span class="timestamp">${(msgs.length + emails.length)} items</span></h3>`;
+    if (msgs.length) {
+      html += `<div class="msg-thread"><div class="thread-label">iMessages</div>`;
+      for (const m of msgs.slice(0, 20)) {
+        const ts = m.sent_at ? formatTime(m.sent_at) : '';
+        const sent = m.direction === 'sent' ? 'sent' : '';
+        html += `<div class="msg-bubble ${sent}"><div class="ts">${esc(ts)}</div><div class="txt">${esc(m.text || '(attachment)')}</div></div>`;
+      }
+      html += `</div>`;
+    }
+    if (emails.length) {
+      html += `<div class="msg-thread"><div class="thread-label">Emails</div>`;
+      for (const e of emails.slice(0, 15)) {
+        const arrow = e.direction === 'received' ? '↓' : '↑';
+        const cls = e.direction === 'received' ? 'received' : 'sent';
+        html += `<div class="email-row-compact">
+          <span class="dir ${cls}">${arrow}</span>
+          <span class="date-col">${esc(e.date || '')}</span>
+          <span class="subject">${esc(e.subject || '(no subject)')}</span>
+          ${e.snippet ? `<div class="snippet">${esc(e.snippet)}</div>` : ''}
+        </div>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  document.getElementById('contact-detail').innerHTML = html;
+}
+
+async function regenInsight() {
+  const d = state.contactDetail;
+  if (!d) return;
+  const btn = document.getElementById('insight-btn');
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+  document.getElementById('insight-body').innerHTML = '<div class="insight-empty">Thinking…</div>';
+  try {
+    const r = await api('/api/contacts/' + encodeURIComponent(d.contact) + '/insight', { method: 'POST' });
+    state.contactDetail.insight = { insight: r.insight, generated_at: r.generated_at };
+    renderContactDetail();
+    toast('Insight ready');
+  } catch (e) {
+    toast('Insight failed: ' + e.message, 'err');
+    btn.disabled = false;
+    btn.textContent = 'Try again';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Nudges
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadNudges() {
+  try {
+    const { nudges } = await api('/api/nudges');
+    state.nudges = nudges;
+    renderNudges();
+    // re-render contact rows to show badges if nudges changed
+    if (state.view === 'contacts') renderContacts();
+  } catch {}
+}
+
+function renderNudges() {
+  const el = document.getElementById('nudges-list');
+  const contactsNav = document.querySelector('.nav-item[data-view="contacts"]');
+  contactsNav.classList.toggle('has-nudges', state.nudges.length > 0);
+  if (!state.nudges.length) {
+    el.innerHTML = '<div class="nudges-empty">Nothing overdue.</div>';
+    return;
+  }
+  el.innerHTML = state.nudges.map(n => `
+    <div class="nudge" onclick="selectNudge('${esc(n.contact).replace(/'/g,"\\'")}')">
+      <div class="name">${esc(n.contact)}</div>
+      <div class="days">${n.days_since_contact}d</div>
+      <button class="dismiss" onclick="event.stopPropagation();dismissNudge('${esc(n.contact).replace(/'/g,"\\'")}')" title="Dismiss">×</button>
+    </div>
+  `).join('');
+}
+
+function selectNudge(name) {
+  setView('contacts');
+  setTimeout(() => selectContact(name), 30);
+}
+
+async function dismissNudge(contact) {
+  try {
+    await api('/api/nudges/' + encodeURIComponent(contact) + '/dismiss', { method: 'POST' });
+    state.nudges = state.nudges.filter(n => n.contact !== contact);
+    renderNudges();
+    if (state.view === 'contacts') renderContacts();
+    toast('Dismissed for this week');
+  } catch (e) { toast('Failed: ' + e.message, 'err'); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Calendar
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadCalendar() {
+  const body = document.getElementById('calendar-body');
+  body.innerHTML = '<div style="padding:40px 0;color:var(--muted);text-align:center;font-size:13px">Loading…</div>';
+  try {
+    const { events } = await api('/api/calendar/events?days=14');
+    state.events = events;
+    document.getElementById('count-calendar').textContent = events.length;
+    renderCalendar();
+  } catch (e) {
+    body.innerHTML = `<div style="padding:40px 0;color:var(--muted);text-align:center;font-size:13px">
+      Couldn't load: ${esc(e.message)}<br><br>
+      <button class="btn small ghost" onclick="pollCalendarNow()">Sync now</button>
+    </div>`;
+  }
+}
+
+function renderCalendar() {
+  const body = document.getElementById('calendar-body');
+  if (!state.events.length) {
+    body.innerHTML = `<div style="padding:40px 0;color:var(--muted);text-align:center;font-size:13px">
+      No events in the next 14 days.<br><br>
+      <button class="btn small ghost" onclick="pollCalendarNow()">Sync now</button>
+    </div>`;
+    return;
+  }
+  const groups = new Map();
+  for (const e of state.events) {
+    if (!groups.has(e.date)) groups.set(e.date, []);
+    groups.get(e.date).push(e);
+  }
+  const today = localDateStr();
+  const contactKeys = new Set(state.contacts.map(c => c.contact.toLowerCase()));
+  const glossKeys = new Set(state.contacts.filter(c => c.gloss).map(c => c.contact.toLowerCase()));
+  let html = '';
+  for (const [date, evs] of groups) {
+    const isToday = date === today;
+    html += `<div class="day-group">
+      <h2>${esc(formatDay(date))}${isToday ? '<span class="today">Today</span>' : ''}</h2>`;
+    for (const e of evs) {
+      const time = (e.start_time && e.start_time.length > 10)
+        ? formatTime(e.start_time)
+        : 'All day';
+      const atts = (e.attendees || []).slice(0, 8);
+      html += `<div class="event-card" onclick="selectEvent('${esc(e.id)}')">
+        <div class="top">
+          <span class="time">${esc(time)}</span>
+          <span class="title">${esc(e.title)}</span>
+        </div>
+        ${e.location ? `<div class="loc">${esc(e.location)}</div>` : ''}
+        ${atts.length ? `<div class="attendees">${atts.map(a => {
+          const n = a.name || (a.email || '').split('@')[0];
+          const k = (a.name || a.email || '').toLowerCase();
+          const known = glossKeys.has(k) || contactKeys.has(k);
+          return `<span class="att-chip ${known ? 'known' : ''}">${esc(n)}</span>`;
+        }).join('')}</div>` : ''}
+      </div>`;
+    }
+    html += `</div>`;
+  }
+  body.innerHTML = html;
+}
+
+async function selectEvent(id) {
+  state.selectedEventId = id;
+  const body = document.getElementById('calendar-body');
+  body.innerHTML = '<div style="padding:40px 0;color:var(--muted);text-align:center;font-size:13px">Loading event…</div>';
+  try {
+    const { event, brief } = await api('/api/calendar/events/' + encodeURIComponent(id));
+    renderEventDetail(event, brief);
+  } catch (e) {
+    body.innerHTML = `<div style="padding:40px 0;color:var(--muted);text-align:center">
+      ${esc(e.message)}<br><br>
+      <button class="btn small ghost" onclick="loadCalendar()">Back</button>
+    </div>`;
+  }
+}
+
+function renderEventDetail(ev, brief) {
+  const time = (ev.start_time && ev.start_time.length > 10)
+    ? (formatDay(ev.date) + ' · ' + formatTime(ev.start_time)) : formatDay(ev.date);
+  const glossByName = new Map(state.contacts.filter(c => c.gloss).map(c => [c.contact.toLowerCase(), c]));
+
+  let attHtml = '';
+  const atts = ev.attendees || [];
+  for (const a of atts) {
+    const displayName = a.name || a.email;
+    const known = glossByName.get((a.name || a.email || '').toLowerCase());
+    attHtml += `<div class="attendee-row">
+      <div class="ico">${esc(initials(displayName))}</div>
+      <div class="info">
+        <div class="name">${esc(displayName || '(unknown)')}</div>
+        ${a.email ? `<div class="email">${esc(a.email)}</div>` : ''}
+      </div>
+      ${known ? `<button class="btn ghost small" onclick="selectContactFromEvent('${esc(displayName).replace(/'/g,"\\'")}')">View profile</button>` : ''}
+    </div>`;
+  }
+
+  const html = `
+    <div class="event-detail">
+      <a class="back" onclick="loadCalendar()">← Back to calendar</a>
+      <h1>${esc(ev.title)}</h1>
+      <div class="details-meta">
+        <span>${esc(time)}</span>
+        ${ev.location ? `<span>📍 ${esc(ev.location)}</span>` : ''}
+        ${ev.html_link ? `<a href="${esc(ev.html_link)}" target="_blank">Open in Google →</a>` : ''}
+      </div>
+
+      ${ev.description ? `<div class="card"><h3><span>Description</span></h3><div style="font-size:13px;line-height:1.6;white-space:pre-wrap">${esc(ev.description.slice(0, 1000))}${ev.description.length > 1000 ? '…' : ''}</div></div>` : ''}
+
+      ${atts.length ? `<div class="card">
+        <h3><span>Attendees (${atts.length})</span></h3>
+        ${attHtml}
+      </div>` : ''}
+
+      <div class="card">
+        <h3>
+          <span>Meeting prep briefing</span>
+          <span class="timestamp">${brief ? ('generated ' + esc(daysAgo(brief.generated_at))) : ''}</span>
+        </h3>
+        <div id="brief-body" class="brief-body">
+          ${brief ? renderMd(brief.brief) : '<div class="insight-empty">No briefing yet.</div>'}
+        </div>
+        <div style="margin-top:14px">
+          <button class="btn" id="brief-btn" onclick="regenBrief('${esc(ev.id)}')">
+            ${brief ? 'Regenerate briefing' : 'Prepare briefing'}
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById('calendar-body').innerHTML = html;
+}
+
+function selectContactFromEvent(name) {
+  setView('contacts');
+  setTimeout(() => selectContact(name), 30);
+}
+
+async function regenBrief(eventId) {
+  const btn = document.getElementById('brief-btn');
+  btn.disabled = true;
+  btn.textContent = 'Preparing…';
+  document.getElementById('brief-body').innerHTML = '<div class="insight-empty">Thinking…</div>';
+  try {
+    const r = await api('/api/calendar/events/' + encodeURIComponent(eventId) + '/brief', { method: 'POST' });
+    document.getElementById('brief-body').innerHTML = renderMd(r.brief);
+    btn.disabled = false;
+    btn.textContent = 'Regenerate briefing';
+    toast('Briefing ready');
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Try again';
+    document.getElementById('brief-body').innerHTML = '<div class="insight-empty">Failed: ' + esc(e.message) + '</div>';
+    toast('Briefing failed', 'err');
+  }
+}
+
+async function pollCalendarNow() {
+  toast('Syncing calendar…');
+  try {
+    const r = await api('/api/calendar/poll', { method: 'POST' });
+    toast(`Synced ${r.events || 0} events`);
+    await loadCalendar();
+  } catch (e) {
+    toast('Sync failed: ' + e.message, 'err');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Daily
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadDaily() {
+  try {
+    const runs = await api('/api/runs');
+    state.runs = runs;
+    renderDailyRuns();
+    if (runs.length && !state.selectedRun) selectRun(runs[0].date);
+  } catch (e) { toast('Load failed: ' + e.message, 'err'); }
+}
+
+function renderDailyRuns() {
+  const el = document.getElementById('daily-runs');
+  if (!state.runs.length) {
+    el.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">No runs yet</div>';
+    return;
+  }
+  el.innerHTML = state.runs.map(r => {
+    const d = new Date(r.date + 'T12:00:00');
+    const dow = DAYS[d.getDay()];
+    const active = r.date === state.selectedRun ? 'active' : '';
+    let badge, label;
+    if (r.status === 'running') { badge = 'running'; label = '…'; }
+    else if (r.status === 'error') { badge = 'error'; label = 'err'; }
+    else if (r.status === 'done') {
+      const n = (r.messages_count || 0) + (r.emails_count || 0);
+      badge = n ? 'done' : 'empty';
+      label = n ? `${r.messages_count || 0}m ${r.emails_count || 0}e` : '—';
+    } else { badge = 'empty'; label = '—'; }
+    return `<div class="daily-row ${active}" onclick="selectRun('${r.date}')">
+      <span class="dow">${dow}</span>
+      <span class="date">${r.date}</span>
+      <span class="daily-badge ${badge}">${label}</span>
+    </div>`;
+  }).join('');
+}
+
+async function selectRun(date) {
+  state.selectedRun = date;
+  clearInterval(state.runsPollTimer);
+  renderDailyRuns();
+  const el = document.getElementById('daily-detail');
+  el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding-top:40px;text-align:center">Loading…</div>';
+  try {
+    const detail = await api('/api/runs/' + date);
+    state.runDetail = detail;
+    renderRunDetail();
+    if (detail?.run?.status === 'running') {
+      state.runsPollTimer = setInterval(async () => {
+        try {
+          const d = await api('/api/runs/' + date);
+          state.runDetail = d;
+          renderRunDetail();
+          await loadDaily();
+          if (d?.run?.status !== 'running') clearInterval(state.runsPollTimer);
+        } catch {}
+      }, 2000);
+    }
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding-top:40px;text-align:center">' + esc(e.message) + '</div>';
+  }
+}
+
+function renderRunDetail() {
+  const el = document.getElementById('daily-detail');
+  const detail = state.runDetail;
+  if (!detail || !detail.run) {
+    el.innerHTML = '<div class="empty-state">No data.</div>';
+    return;
+  }
+  const { run, messages, emails } = detail;
+  const collectLabel = run.status === 'running' ? 'Collecting…' : 'Re-collect';
+  const collectDisabled = run.status === 'running' ? 'disabled' : '';
+  const collectedAt = run.collected_at ? new Date(run.collected_at).toLocaleTimeString() : '';
+
+  let html = `<div class="profile-header">
+    <div>
+      <h1>${esc(formatDay(run.date))}</h1>
+      <div class="meta"><span>${run.messages_count} iMessages</span><span>${run.emails_count} emails</span>${collectedAt ? `<span>collected ${esc(collectedAt)}</span>` : ''}</div>
+    </div>
+    <div class="actions">
+      <button class="btn ghost small" ${collectDisabled} onclick="triggerCollect('${run.date}')">${collectLabel}</button>
+    </div>
+  </div>`;
+
+  if (run.status === 'done' && !messages?.length && !emails?.length) {
+    html += `<div class="card" style="border-color:#3d3418;background:#1e1a0e;color:var(--yellow)">
+      <h3 style="color:#e8c97a"><span>No data collected</span></h3>
+      <div style="font-size:13px;line-height:1.6">
+        <b>Gmail:</b> connect an account via ⚙ Settings.<br>
+        <b>iMessages:</b> requires Full Disk Access on macOS (System Settings → Privacy & Security → Full Disk Access).
+      </div>
+    </div>`;
+  }
+
+  if (messages?.length) {
+    const groups = new Map();
+    for (const m of messages) {
+      if (!groups.has(m.contact)) groups.set(m.contact, []);
+      groups.get(m.contact).push(m);
+    }
+    html += `<div class="card"><h3><span>iMessages (${messages.length})</span></h3>`;
+    for (const [contact, msgs] of groups) {
+      html += `<div style="margin-bottom:16px">
+        <div class="thread-label" style="cursor:pointer" onclick="selectContactFromDaily('${esc(contact).replace(/'/g,"\\'")}')">${esc(contact)}</div>`;
+      for (const m of msgs) {
+        const ts = m.sent_at ? formatTime(m.sent_at) : '';
+        const sent = m.direction === 'sent' ? 'sent' : '';
+        html += `<div class="msg-bubble ${sent}"><div class="ts">${esc(ts)}</div><div class="txt">${esc(m.text || '(attachment)')}</div></div>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  if (emails?.length) {
+    html += `<div class="card"><h3><span>Emails (${emails.length})</span></h3>`;
+    for (const e of emails) {
+      const arrow = e.direction === 'received' ? '↓' : '↑';
+      const cls = e.direction === 'received' ? 'received' : 'sent';
+      html += `<div class="email-row-compact">
+        <span class="dir ${cls}">${arrow}</span>
+        <span class="date-col">${esc(e.account ? e.account.split('@')[0] : '')}</span>
+        <span style="color:var(--muted);font-size:11px;width:120px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" onclick="selectContactFromDaily('${esc(e.contact).replace(/'/g,"\\'")}')">${esc(e.contact)}</span>
+        <span class="subject">${esc(e.subject || '(no subject)')}</span>
+        ${e.snippet ? `<div class="snippet">${esc(e.snippet)}</div>` : ''}
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  if (run.error) {
+    html += `<div class="card" style="border-color:#3d1e1e"><h3 style="color:var(--red)"><span>Error</span></h3><pre style="font-size:12px;color:var(--muted);white-space:pre-wrap">${esc(run.error)}</pre></div>`;
+  }
+
+  el.innerHTML = html;
+}
+
+function selectContactFromDaily(name) {
+  setView('contacts');
+  setTimeout(() => selectContact(name), 30);
+}
+
+async function triggerCollect(date) {
+  try {
+    await api('/api/collect/' + date, { method: 'POST' });
+    await loadDaily();
+    await selectRun(date);
+  } catch (e) { toast('Collect failed: ' + e.message, 'err'); }
+}
+
+async function collectToday() { await triggerCollect(localDateStr()); }
+
+async function catchUp() {
+  const btn = document.getElementById('catchup-btn');
+  btn.disabled = true;
+  btn.textContent = 'Catching up…';
+  try {
+    const r = await api('/api/collect/catchup', { method: 'POST' });
+    if (r.dates?.length) {
+      toast('Collecting ' + r.dates.length + ' day(s)…');
+      await loadDaily();
+      const poll = setInterval(async () => {
+        await loadDaily();
+        const runs = state.runs;
+        const anyRunning = r.dates.some(d => runs.find(x => x.date === d)?.status === 'running');
+        if (!anyRunning) { clearInterval(poll); btn.disabled = false; btn.textContent = 'Catch up'; }
+      }, 3000);
+    } else {
+      toast(r.message || 'Already up to date');
+      btn.disabled = false; btn.textContent = 'Catch up';
+    }
+  } catch (e) {
+    toast('Catchup failed', 'err');
+    btn.disabled = false; btn.textContent = 'Catch up';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Settings / accounts
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadAccounts() {
+  try {
+    const accounts = await api('/api/gmail/accounts');
+    const el = document.getElementById('accounts-list');
+    if (!accounts.length) {
+      el.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:4px 0">No accounts connected.</div>';
+      return;
+    }
+    el.innerHTML = accounts.map(a => `
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px">
+        <div style="flex:1">${esc(a.email)}</div>
+        <button class="btn ghost small" onclick="removeAccount('${esc(a.id)}','${esc(a.email)}')">×</button>
+      </div>`).join('');
+  } catch {}
+}
+
+function addGmail() { location.href = '/api/gmail/auth'; }
+
+async function removeAccount(id, email) {
+  if (!confirm(`Disconnect ${email}?`)) return;
+  try {
+    await api('/api/gmail/accounts/' + id, { method: 'DELETE' });
+    await loadAccounts();
+    toast('Disconnected ' + email);
+  } catch (e) { toast('Failed: ' + e.message, 'err'); }
+}
+
+function openModal(id) { document.getElementById(id).classList.add('show'); loadAccounts(); }
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+document.getElementById('settings-btn').addEventListener('click', () => openModal('settings-modal'));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Search (debounced)
+// ═══════════════════════════════════════════════════════════════════════════
+let searchDebounce = null;
+document.getElementById('search').addEventListener('input', (e) => {
+  state.searchTerm = e.target.value;
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => {
+    if (state.view !== 'contacts') setView('contacts');
+    else renderContacts();
+  }, 150);
+});
+
+// Keyboard: / focuses search, Esc closes
+window.addEventListener('keydown', (e) => {
+  if (e.key === '/' && document.activeElement.tagName !== 'INPUT') {
+    e.preventDefault();
+    document.getElementById('search').focus();
+  } else if (e.key === 'Escape') {
+    closeModal('settings-modal');
+    if (document.body.classList.contains('detail-open')) closeContactDetail();
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Boot
+// ═══════════════════════════════════════════════════════════════════════════
+(async () => {
+  // OAuth redirect banners
+  const params = new URLSearchParams(location.search);
+  if (params.get('gmail_connected')) {
+    toast('Connected ' + params.get('gmail_connected'));
+    history.replaceState({}, '', '/');
+  }
+  if (params.get('gmail_error')) {
+    toast('Gmail error: ' + params.get('gmail_error'), 'err');
+    history.replaceState({}, '', '/');
+  }
+
+  // Initial view from hash
+  const h = location.hash.replace(/^#\//, '').split('/')[0];
+  if (h && ['contacts','calendar','daily'].includes(h)) setView(h);
+  else setView('contacts');
+
+  // Refresh nudges periodically
+  setInterval(loadNudges, 60_000);
+})();
+</script>
+</body>
+</html>

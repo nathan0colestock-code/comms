@@ -81,9 +81,9 @@ describe('authentication', () => {
     assert.equal(status, 200);
   });
 
-  it('serves the dashboard at / without auth', async () => {
+  it('redirects / to /login when unauthenticated', async () => {
     const { status } = await req('/');
-    assert.equal(status, 200);
+    assert.equal(status, 302);
   });
 });
 
