@@ -747,8 +747,11 @@ function renderContacts() {
     const nudgeBadge = nudgeSet.has(c.contact.toLowerCase()) ? '<span class="nudge-pill">nudge</span>' : '';
     const starStr = prio ? `<span class="stars">${stars(prio)}</span>` : '';
     const glossDot = hasGloss && !prio ? '<span class="dot" title="In notebook"></span>' : '';
-    const totalComms = c.message_count + c.email_count;
-    const metaStr = totalComms ? `${totalComms} · ${last}` : (hasGloss ? 'no comms yet' : last);
+    const parts = [];
+    if (c.message_count) parts.push(`${c.message_count} msg`);
+    if (c.email_count)   parts.push(`${c.email_count} email`);
+    if (c.last_contact_date) parts.push(last);
+    const metaStr = parts.length ? parts.join(' · ') : (hasGloss ? 'no comms yet' : 'never');
     const chips = (c.gloss?.linked_collections || []).slice(0, 3)
       .map(title => `<span class="chip">${esc(title)}</span>`).join('');
     return `<div class="contact-row ${active}" onclick="selectContact('${esc(c.contact).replace(/'/g,"\\'")}')">
