@@ -6,7 +6,29 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const { classifyEmail } = require('../email-helper');
+
+// Mock ./gmail before requiring email-helper so runForAccount picks up stubs.
+// Must use absolute path to match email-helper's require('./gmail') resolution.
+const gmailPath = require.resolve('../gmail');
+require.cache[gmailPath] = {
+  id: gmailPath,
+  filename: gmailPath,
+  loaded: true,
+  exports: {
+    gmailClientFor: (_tokenJson) => ({
+      gmail: {},
+      refreshed: { value: { access_token: 'new-access-token' } },
+    }),
+    listUnreadInboxThreads: async () => [], // no threads → skip the loop
+    getMessageFull: async () => ({}),
+    createDraftReply: async () => ({}),
+    archiveThread: async () => ({}),
+    extractEmail: (s) => (String(s).match(/[^\s<>]+@[^\s<>]+/) || [''])[0],
+    hasScope: () => true,
+  },
+};
+
+const { classifyEmail, runEmailHelper } = require('../email-helper');
 
 describe('classifyEmail', () => {
   test('flags transactional: no-reply senders', () => {
@@ -50,5 +72,35 @@ describe('classifyEmail', () => {
       listUnsubscribe: '<mailto:u@acme.com>',
     });
     assert.equal(r.kind, 'newsletter');
+  });
+});
+
+describe('runEmailHelper: token persistence', () => {
+  test('saveGmailTokens is called with acct.id (not acct.email)', async () => {
+    // Regression: UPDATE gmail_accounts ... WHERE id = ? is keyed on the
+    // numeric id, but email-helper was passing acct.email. Silent no-op
+    // meant every Google refresh on the 8am/noon run was discarded and
+    // eventually tokens hit invalid_grant. Assert the id is what's saved.
+    const calls = [];
+    const acct = {
+      id: 42,
+      email: 'nathan@example.com',
+      token_json: JSON.stringify({ access_token: 'old', refresh_token: 'r' }),
+    };
+    // Minimal fake db — prepare() only needs to no-op for the
+    // email_helper_runs insert at the end of runEmailHelper.
+    const fakeDb = {
+      prepare: () => ({ run: () => {}, all: () => [], get: () => null }),
+    };
+    const result = await runEmailHelper({
+      db: fakeDb,
+      getGmailAccountsWithTokens: () => [acct],
+      saveGmailTokens: (id, tokens) => { calls.push({ id, tokens }); },
+    });
+    assert.equal(calls.length, 1, 'saveGmailTokens should be called once');
+    assert.equal(calls[0].id, 42, 'must be called with acct.id, not acct.email');
+    assert.equal(calls[0].tokens.access_token, 'new-access-token');
+    assert.equal(calls[0].tokens.refresh_token, 'r', 'prior refresh_token preserved');
+    assert.ok(result, 'runEmailHelper returned a result');
   });
 });
