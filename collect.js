@@ -1698,13 +1698,9 @@ function listCalendarEvents({ days = 14 } = {}) {
   try {
     const today = localDateStr();
     const end = new Date(Date.now() + days * 86400_000).toISOString().slice(0, 10);
-    // Exclude Google's auto-generated Contacts/Birthdays calendar
-    // (calendar_id contains '#contacts' e.g. addressbook#contacts@group.v.calendar.google.com).
-    // Those dates are already tracked in the Dates tab via special_dates.
     const rows = db.prepare(`
       SELECT * FROM calendar_events
       WHERE date >= ? AND date <= ?
-        AND calendar_id NOT LIKE '%#contacts%'
       ORDER BY date, start_time
     `).all(today, end);
     return rows.map(hydrateEvent);
