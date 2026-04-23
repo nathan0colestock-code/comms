@@ -42,6 +42,7 @@ const {
   upsertCalendarEvents, pruneOldCalendarEvents, listCalendarEvents, getCalendarEvent,
   getMeetingBrief, saveMeetingBrief,
   getNudges, dismissNudge,
+  getOverview, searchAll,
   DB_PATH,
 } = require('./collect');
 const { getAuthUrl, exchangeCode, getAccountEmail, hasScope } = require('./gmail');
@@ -203,8 +204,16 @@ const jobs = new Map();
 
 // ─── Collection API (existing) ──────────────────────────────────────────────
 app.get('/api/status', (req, res) => {
-  const runs = getRuns(1);
-  res.json({ ok: true, db: DB_PATH, last_run: runs[0] || null });
+  try { res.json({ ok: true, db: DB_PATH, ...getOverview() }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Unified search across messages, emails, and contacts.
+app.get('/api/search', (req, res) => {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q : '';
+    res.json(searchAll(q, { limit: Math.min(parseInt(req.query.limit, 10) || 25, 100) }));
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/runs', (req, res) => {
@@ -254,15 +263,8 @@ app.post('/api/collect/:date', async (req, res) => {
 
 // ─── Gmail account management (existing) ────────────────────────────────────
 app.get('/api/gmail/accounts', (req, res) => {
-  try {
-    const accounts = getGmailAccounts();
-    // Surface whether calendar scope is present so the UI can prompt a reconnect
-    const withScopes = accounts.map(a => {
-      const full = getGmailAccounts().find(x => x.id === a.id);
-      return { ...full };
-    });
-    res.json(withScopes);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  try { res.json(getGmailAccounts()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/gmail/auth', (req, res) => {
