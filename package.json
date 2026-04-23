@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "collect": "node collect.js"
+    "collect": "node collect.js",
+    "test": "node --test test/unit.test.js test/db.test.js test/api.test.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",

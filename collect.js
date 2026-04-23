@@ -28,7 +28,7 @@ const { fetchEmailsForDate } = require('./gmail');
 // ---------------------------------------------------------------------------
 
 const DATA_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'comms');
-const DB_PATH  = path.join(DATA_DIR, 'comms.db');
+const DB_PATH  = process.env.COMMS_DB_PATH || path.join(DATA_DIR, 'comms.db');
 
 function loadEnv() {
   const p = path.join(__dirname, '.env');
@@ -45,7 +45,8 @@ loadEnv();
 // ---------------------------------------------------------------------------
 
 function openDb() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  const dir = path.dirname(DB_PATH);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const db = new Database(DB_PATH);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
@@ -617,6 +618,8 @@ module.exports = {
   getGmailAccounts, saveGmailAccount, deleteGmailAccount,
   testMessagesAccess,
   DB_PATH,
+  // Exported for testing
+  extractTextFromAttributedBody, normalizePhone, isRealPersonEmail,
 };
 
 // ---------------------------------------------------------------------------

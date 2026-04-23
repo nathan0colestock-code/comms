@@ -110,4 +110,4 @@ function extractEmail(raw) {
   return (m ? m[1] : raw.trim()).toLowerCase();
 }
 
-module.exports = { getAuthUrl, exchangeCode, getAccountEmail, fetchEmailsForDate };
+module.exports = { getAuthUrl, exchangeCode, getAccountEmail, fetchEmailsForDate, parseContact, extractEmail };

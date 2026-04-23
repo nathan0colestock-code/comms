@@ -85,6 +85,12 @@ npm install
 cp .env.example .env
 ```
 
+Generate an API key and fill in the Gmail credentials:
+
+```bash
+openssl rand -hex 32   # paste result as API_KEY
+```
+
 For Gmail, fill in `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`:
 
 1. Go to [console.cloud.google.com](https://console.cloud.google.com)
@@ -125,7 +131,7 @@ For automated daily collection, add a cron job or launchd agent that runs `node 
 
 ## Integration API
 
-The server also exposes a small REST API for other apps:
+The server exposes a REST API for other apps. It runs locally on port 3748 and is also tunneled to a stable public HTTPS URL via ngrok so deployed apps can reach it.
 
 ```
 GET  /api/runs               — list recent runs (last 60 days)
@@ -134,11 +140,106 @@ POST /api/collect/:date      — trigger collection for a specific date
 GET  /api/gmail/accounts     — list connected Gmail accounts
 ```
 
-Example — fetch today's communications from another Node.js app:
+All `/api/*` routes require an API key — pass it as a header:
+
+```
+Authorization: Bearer <API_KEY>
+```
+
+or
+
+```
+X-API-Key: <API_KEY>
+```
+
+The key lives in `.env` as `API_KEY`. Generate one with:
+
+```bash
+openssl rand -hex 32
+```
+
+### Local access
 
 ```js
-const res = await fetch('http://localhost:3748/api/runs/2026-04-22');
+const res = await fetch('http://localhost:3748/api/runs/2026-04-22', {
+  headers: { 'Authorization': `Bearer ${process.env.COMMS_API_KEY}` }
+});
 const { messages, emails } = await res.json();
+```
+
+### Remote access (deployed apps)
+
+The tunnel runs automatically at login via a launchd agent. Call the public URL from any deployed app:
+
+```js
+const res = await fetch('https://crevice-erupt-caucus.ngrok-free.dev/api/runs/2026-04-22', {
+  headers: { 'Authorization': `Bearer ${process.env.COMMS_API_KEY}` }
+});
+const { messages, emails } = await res.json();
+```
+
+### Running the tunnel
+
+The ngrok tunnel and comms server are both registered as launchd agents and start automatically at login. To manage them manually:
+
+```bash
+# Start
+launchctl load ~/Library/LaunchAgents/com.comms.server.plist
+launchctl load ~/Library/LaunchAgents/com.comms.ngrok.plist
+
+# Stop
+launchctl unload ~/Library/LaunchAgents/com.comms.server.plist
+launchctl unload ~/Library/LaunchAgents/com.comms.ngrok.plist
+
+# Logs
+tail -f /tmp/comms-server.log
+tail -f /tmp/ngrok-comms.log
+```
+
+---
+
+## Tests
+
+```bash
+npm test
+```
+
+Runs 42 tests across three files using Node's built-in test runner (no extra dependencies):
+
+- `test/unit.test.js` — pure functions: phone normalisation, email filtering, contact parsing, NSTypedStream decoding
+- `test/db.test.js` — database schema, runs/accounts CRUD against a temp SQLite file
+- `test/api.test.js` — HTTP auth middleware and route responses against an in-process server
+
+---
+
+## Installing as background services
+
+Run once after cloning to register launchd agents that start the server (and the ngrok tunnel, if configured) automatically at login:
+
+```bash
+bash install.sh
+```
+
+The script detects your Node path (including nvm/volta installs), generates the correct plist files for your machine, and loads them immediately. Re-run it whenever you update Node or move the repo.
+
+---
+
+## Setting up with Claude Code
+
+If you have [Claude Code](https://claude.ai/code) installed, paste this prompt to have it walk you through the full setup interactively:
+
+```
+I want to set up Comm's — a local iMessage + Gmail aggregator. Read README.md in the current directory, then guide me through the following steps, checking each one before moving to the next:
+
+1. Run `npm install` if node_modules is missing.
+2. Check for `.env` — if missing, copy from `.env.example`, then generate an API_KEY with `openssl rand -hex 32` and write it in.
+3. Test iMessage access: run `node -e "require('better-sqlite3')(require('os').homedir()+'/Library/Messages/chat.db',{readonly:true}).close();console.log('ok')"` — if it fails, tell me exactly what to enable in System Settings and wait for me to confirm before continuing.
+4. Start the server briefly (`node server.js &`), confirm it's listening on port 3748, then stop it.
+5. Ask if I want Gmail integration. If yes, walk me through creating Google OAuth credentials and connecting an account via the dashboard.
+6. Ask if I want a public HTTPS tunnel via ngrok. If yes, help me install ngrok, create a free account, get my authtoken and static domain, and configure the ngrok.yml.
+7. Run `bash install.sh` to register everything as launchd services.
+8. Run `npm test` and confirm all tests pass.
+9. Do a test collection: `node collect.js` (defaults to yesterday) and show me the output.
 ```
 
 ---

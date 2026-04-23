@@ -46,6 +46,19 @@ const PORT = parseInt(process.env.PORT || '3748', 10);
 const app  = express();
 app.use(express.json());
 
+// Protect all /api/* routes with a static bearer token.
+// Pass via:  Authorization: Bearer <key>  or  X-API-Key: <key>
+const API_KEY = process.env.API_KEY;
+if (!API_KEY) { console.error('WARNING: API_KEY not set — /api routes are unprotected'); }
+app.use('/api', (req, res, next) => {
+  if (!API_KEY) return next();
+  const auth = req.headers['authorization'];
+  const key  = (auth?.startsWith('Bearer ') ? auth.slice(7) : null)
+             ?? req.headers['x-api-key'];
+  if (!key || key !== API_KEY) return res.status(401).json({ error: 'Unauthorized' });
+  next();
+});
+
 // In-flight jobs: date → { running, log[], error }
 const jobs = new Map();
 
@@ -605,13 +618,17 @@ async function catchUp() {
 
 app.get('/', (req, res) => res.send(HTML));
 
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`Comm's  →  http://localhost:${PORT}`);
-  console.log(`DB      →  ${DB_PATH}`);
-  console.log('');
-  console.log('Integration API:');
-  console.log(`  GET  /api/runs`);
-  console.log(`  GET  /api/runs/YYYY-MM-DD`);
-  console.log(`  POST /api/collect/YYYY-MM-DD`);
-  console.log(`  GET  /api/gmail/accounts`);
-});
+if (require.main === module) {
+  app.listen(PORT, '127.0.0.1', () => {
+    console.log(`Comm's  →  http://localhost:${PORT}`);
+    console.log(`DB      →  ${DB_PATH}`);
+    console.log('');
+    console.log('Integration API:');
+    console.log(`  GET  /api/runs`);
+    console.log(`  GET  /api/runs/YYYY-MM-DD`);
+    console.log(`  POST /api/collect/YYYY-MM-DD`);
+    console.log(`  GET  /api/gmail/accounts`);
+  });
+}
+
+module.exports = { app };
