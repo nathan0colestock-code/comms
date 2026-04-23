@@ -87,6 +87,10 @@ const AUTH_BYPASS = new Set([
   '/api/gmail/callback',
   '/favicon.ico', '/favicon.svg', '/apple-touch-icon.png', '/manifest.json',
   '/icon-192.png', '/icon-512.png',
+  // PWA offline assets — served at the unauthenticated edge so the SW can
+  // register and the offline fallback page renders when the user is logged out
+  // or the network is down.
+  '/sw.js', '/offline.html',
 ]);
 
 function signCookie(payload) {

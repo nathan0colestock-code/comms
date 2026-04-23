@@ -2920,5 +2920,14 @@ function copyDraft() {
   setInterval(loadNudges, 60_000);
 })();
 </script>
+<script>
+// Register the service worker for offline fallback + static-asset caching.
+// The SW itself never caches /api/* so auth-scoped data is always fresh.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => { /* non-fatal */ });
+  });
+}
+</script>
 </body>
 </html>
