@@ -1182,11 +1182,27 @@ async function loadDaily() {
 
 function renderDailyRuns() {
   const el = document.getElementById('daily-runs');
-  if (!state.runs.length) {
+  const today = localDateStr();
+  const todayHasRun = state.runs.some(r => r.date === today);
+
+  let html = '';
+  if (!todayHasRun) {
+    // Insert a stub row at the top so the user can see today's status
+    // at a glance without hunting through the date list.
+    const dow = DAYS[new Date(today + 'T12:00:00').getDay()];
+    const active = state.selectedRun === today ? 'active' : '';
+    html += `<div class="daily-row ${active}" onclick="selectRun('${today}')" title="No run yet today">
+      <span class="dow">${dow}</span>
+      <span class="date">${today} <span style="color:var(--muted);font-size:10px;margin-left:4px">(today)</span></span>
+      <span class="daily-badge empty">—</span>
+    </div>`;
+  }
+
+  if (!state.runs.length && todayHasRun) {
     el.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">No runs yet</div>';
     return;
   }
-  el.innerHTML = state.runs.map(r => {
+  html += state.runs.map(r => {
     const d = new Date(r.date + 'T12:00:00');
     const dow = DAYS[d.getDay()];
     const active = r.date === state.selectedRun ? 'active' : '';
@@ -1204,6 +1220,8 @@ function renderDailyRuns() {
       <span class="daily-badge ${badge}">${label}</span>
     </div>`;
   }).join('');
+
+  el.innerHTML = html;
 }
 
 async function selectRun(date) {
@@ -1228,7 +1246,18 @@ async function selectRun(date) {
       }, 2000);
     }
   } catch (e) {
-    el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding-top:40px;text-align:center">' + esc(e.message) + '</div>';
+    // Date with no run yet — present a collect-now CTA instead of an error.
+    const msg = (e.message || '').toLowerCase();
+    if (msg.includes('no run')) {
+      el.innerHTML = `<div style="padding:60px 28px;text-align:center;color:var(--muted);font-size:13px;line-height:1.7">
+        <div style="font-size:28px;opacity:0.4;margin-bottom:12px">☰</div>
+        <b style="color:var(--text)">${esc(formatDay(date))}</b><br>
+        Nothing collected for this day yet.<br><br>
+        <button class="btn small" onclick="triggerCollect('${esc(date)}')">Collect ${esc(date)}</button>
+      </div>`;
+    } else {
+      el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding-top:40px;text-align:center">' + esc(e.message) + '</div>';
+    }
   }
 }
 
