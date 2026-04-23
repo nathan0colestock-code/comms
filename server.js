@@ -49,6 +49,7 @@ const {
   upsertAddressBookContact, pruneAddressBookAccount, recordAddressBookSync,
   listAddressBook, getAddressBookContact, findAddressBookByIdentifiers, addressBookStats,
   rebuildPeople, resolvePerson, getPerson, mergePeople, rejectMergePair, findDuplicateCandidates,
+  getPeopleReviewNext, markPersonReviewed, countPeopleDueForReview,
   getOverview, getSuiteStatusMetrics, searchAll,
   getSetting, saveSetting,
   upsertSpecialDate, listUpcomingSpecialDates, listSpecialDates, deleteSpecialDate,
@@ -942,6 +943,33 @@ app.post('/api/people/reject-merge', (req, res) => {
     const b = Number(body.b_id);
     if (!a || !b) return res.status(400).json({ error: 'a_id and b_id required' });
     res.json(rejectMergePair(a, b));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── People review (on-demand flashcards) ───────────────────────────────────
+// Deliberately registered BEFORE /api/people/:id so "review" isn't captured
+// as a person id. The UI hits /next?skip=N to walk the queue, then posts to
+// /:id/reviewed to mark a Next action (Skip leaves last_reviewed_at alone).
+app.get('/api/people/review/next', (req, res) => {
+  try {
+    const skip = Math.max(0, Number(req.query.skip) || 0);
+    const next = getPeopleReviewNext({ skip });
+    res.json({ ok: true, person: next });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/people/review/due', (req, res) => {
+  try {
+    const days = Math.max(1, Number(req.query.days) || 30);
+    res.json({ ok: true, days, count: countPeopleDueForReview({ days }) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/people/review/:id/reviewed', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'person id required' });
+    res.json(markPersonReviewed(id));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

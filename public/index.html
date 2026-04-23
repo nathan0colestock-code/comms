@@ -23,6 +23,17 @@
   --suite-font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
 }
+/* Single opinionated light theme. Maps the same CSS variables — zero JS, no
+   per-component overrides. Picked for contrast (WCAG AA body text) rather
+   than aesthetic polish. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f7f7f9; --surface: #ffffff; --surface-2: #eceff5; --border: #d8dce6;
+    --text: #1a1c24; --text-dim: #4b5160; --muted: #7a8195; --accent: #3a5ec7;
+    --green: #2d8a5a; --red: #c04545; --yellow: #a77a1f; --gold: #a37926;
+    --suite-focus: #3a5ec7;
+  }
+}
 html, body { height: 100dvh; }
 body {
   background: var(--bg); color: var(--text);
@@ -499,10 +510,17 @@ a.tl-title:hover { color: var(--accent); text-decoration: underline; }
   .layout { flex-direction: column-reverse; }
   aside.sidebar {
     width: 100%; flex-direction: row; border-right: none; border-top: 1px solid var(--border);
-    height: auto; flex-shrink: 0; padding-bottom: env(safe-area-inset-bottom);
+    height: auto; flex-shrink: 0;
+    /* Honor the safe-area inset on iPhones without a home button so the bottom
+       tab bar lifts above the home indicator. */
+    padding-bottom: max(4px, env(safe-area-inset-bottom));
   }
   nav.nav { flex-direction: row; padding: 6px; flex: 1; gap: 2px; }
-  .nav-item { flex: 1; justify-content: center; padding: 10px 6px; font-size: 11px; }
+  /* Bottom tab bar tap targets — guarantee 44px minimum per iOS HIG. */
+  .nav-item {
+    flex: 1; justify-content: center; padding: 10px 6px; font-size: 11px;
+    min-height: var(--suite-touch-min);
+  }
   .nav-item .count { display: none; }
   .nudges-section { display: none; } /* accessible via contacts tab on mobile */
 
@@ -524,9 +542,34 @@ a.tl-title:hover { color: var(--accent); text-decoration: underline; }
 
   .calendar-list, .event-detail { padding: 14px 16px 60px; }
 
-  /* Suite touch-target minimum on mobile (excludes compact .btn.small) */
-  .btn:not(.small) { min-height: var(--suite-touch-min); }
+  /* Suite touch-target minimum on mobile. Previously only .btn:not(.small)
+     got the 44px bump — but .btn.small is used for most toolbar actions
+     ("Catch up", "Today", "Sync now", "+ Add"). Bump them too: keep them
+     visually compact (still 11px font) while guaranteeing 44px tap height. */
+  .btn { min-height: var(--suite-touch-min); padding-top: 8px; padding-bottom: 8px; }
+  .btn.small { min-height: var(--suite-touch-min); padding-top: 6px; padding-bottom: 6px; }
+  .icon-btn { width: var(--suite-touch-min); height: var(--suite-touch-min); }
   .search-wrap input { min-height: var(--suite-touch-min); }
+
+  /* List rows: ensure a full finger can hit them. */
+  .contact-row, .daily-row, .attendee-row, .event-row { min-height: var(--suite-touch-min); }
+  .sr-row { min-height: var(--suite-touch-min); padding: 10px 14px; }
+  /* Nudge dismiss button — a 2px-padded × is unclickable. */
+  .nudge .dismiss { min-width: 32px; min-height: 32px; display: grid; place-items: center; }
+}
+
+/* ─── Touch-device hover replacements ────────────────────────────────── */
+/* On coarse-pointer devices :hover never fires, which leaves several
+   affordances (card borders, dismiss buttons, row highlights) invisible.
+   Make the hover styling the default state on touch devices so the
+   UI isn't silently hiding interactivity. */
+@media (hover: none) {
+  .event-card { border-color: var(--border); }
+  .event-card:active { border-color: var(--accent); }
+  .nudge:active { border-color: var(--accent); }
+  .contact-row:active, .daily-row:active { background: var(--surface); }
+  .sr-row:active { background: var(--surface-2); }
+  .btn.ghost:active { border-color: var(--accent); color: var(--accent); }
 }
 
 .back-link-btn {
@@ -535,6 +578,54 @@ a.tl-title:hover { color: var(--accent); text-decoration: underline; }
 }
 .back-link-btn:hover { color: var(--accent); }
 @media (max-width: 780px) { body.detail-open .back-link-btn { display: inline-block; } }
+
+/* ─── People review (flashcards) ─────────────────────────────────────── */
+.review-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.78); z-index: 60;
+  display: none; flex-direction: column; align-items: center; justify-content: center;
+  padding: 20px; padding-top: max(20px, env(safe-area-inset-top));
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
+}
+.review-overlay.show { display: flex; }
+.review-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  width: 100%; max-width: 640px; max-height: 100%;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.review-head {
+  padding: 16px 22px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+}
+.review-head h2 { font-size: 20px; font-weight: 700; flex: 1; min-width: 0; }
+.review-head .meta { font-size: 11px; color: var(--muted); }
+.review-body {
+  padding: 18px 22px; overflow-y: auto; flex: 1; min-height: 0;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.review-body .rv-section h4 {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); font-weight: 700; margin-bottom: 5px;
+}
+.review-body .rv-section .rv-content {
+  font-size: 13px; line-height: 1.55; color: var(--text); white-space: pre-wrap;
+}
+.review-body .rv-section .rv-content.muted { color: var(--muted); font-style: italic; }
+.review-actions {
+  padding: 14px 22px; border-top: 1px solid var(--border);
+  display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end;
+}
+.review-actions .rv-left { margin-right: auto; font-size: 11px; color: var(--muted); }
+.review-empty { padding: 60px 20px; text-align: center; color: var(--muted); font-size: 14px; }
+
+.review-btn-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.review-btn-bar .due-count {
+  font-size: 11px; color: var(--muted);
+}
+.review-btn-bar .due-count.has { color: var(--yellow); }
 </style>
 <script>window.__SUITE_CURRENT__ = 'comms';</script>
 <script src="https://maestro-nc.fly.dev/suite-switcher.js" defer></script>
@@ -573,6 +664,10 @@ a.tl-title:hover { color: var(--accent); text-decoration: underline; }
         <div class="pane-list-header">
           <span>People</span>
           <span class="count" id="contact-count"></span>
+        </div>
+        <div class="review-btn-bar">
+          <span class="due-count" id="review-due-count" title="Reviewable people not touched in the last 30 days"></span>
+          <button class="btn ghost small" onclick="startReview()" title="Step through people one at a time (←/→ keys)">Start review</button>
         </div>
         <div id="duplicates-banner" style="display:none;padding:8px 14px;background:rgba(255,180,60,0.08);border-bottom:1px solid var(--border);font-size:12px;color:var(--text-dim);align-items:center;justify-content:space-between;gap:8px">
           <span id="duplicates-banner-label"></span>
@@ -872,6 +967,25 @@ a.tl-title:hover { color: var(--accent); text-decoration: underline; }
   </div>
 </div>
 
+<!-- People review (flashcards) — on-demand, user-initiated -->
+<div class="review-overlay" id="review-overlay" role="dialog" aria-modal="true" aria-label="People review">
+  <div class="review-card">
+    <div class="review-head">
+      <h2 id="review-name">Loading…</h2>
+      <span class="meta" id="review-meta"></span>
+    </div>
+    <div class="review-body" id="review-body">
+      <div class="review-empty">Loading…</div>
+    </div>
+    <div class="review-actions">
+      <span class="rv-left" id="review-hint">← Skip · → Next · Esc End</span>
+      <button class="btn ghost small" onclick="endReview()">End review</button>
+      <button class="btn ghost small" onclick="reviewSkip()" title="Skip without marking reviewed (←)">Skip</button>
+      <button class="btn small" onclick="reviewNext()" title="Mark reviewed and load next (→)">Next</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1067,6 +1181,7 @@ async function loadContacts() {
   } catch (e) { toast('Load failed: ' + e.message, 'err'); }
   loadNudges();
   loadDuplicates();
+  loadReviewDueCount();
 }
 
 async function loadDuplicates() {
@@ -1886,7 +2001,8 @@ async function syncAddressBook() {
 // ═══════════════════════════════════════════════════════════════════════════
 async function loadCalendar() {
   const body = document.getElementById('calendar-body');
-  body.innerHTML = '<div style="padding:40px 0;color:var(--muted);text-align:center;font-size:13px">Loading…</div>';
+  // Use skeleton rows so the viewport doesn't flash blank during fetch.
+  if (!state.events.length) body.innerHTML = skeletonRows(8);
   try {
     const { events } = await api('/api/calendar/events?days=14');
     state.events = events;
@@ -2310,6 +2426,8 @@ async function pollCalendarNow() {
 // Daily
 // ═══════════════════════════════════════════════════════════════════════════
 async function loadDaily() {
+  const list = document.getElementById('daily-runs');
+  if (list && !state.runs.length) list.innerHTML = skeletonRows(6);
   try {
     const runs = await api('/api/runs');
     state.runs = runs;
@@ -2695,8 +2813,15 @@ document.addEventListener('click', (e) => {
   window.open(href, '_blank', 'noopener,noreferrer');
 });
 
-// Keyboard: / focuses search, Esc closes
+// Keyboard: / focuses search, Esc closes, ←/→ advance review when open.
 window.addEventListener('keydown', (e) => {
+  // Review mode claims ←/→/Esc while the overlay is visible.
+  if (state.review && state.review.open) {
+    if (e.key === 'Escape')       { e.preventDefault(); endReview(); return; }
+    if (e.key === 'ArrowRight')   { e.preventDefault(); reviewNext(); return; }
+    if (e.key === 'ArrowLeft')    { e.preventDefault(); reviewSkip(); return; }
+    return; // ignore other keys (including /) while reviewing
+  }
   if (e.key === '/' && document.activeElement.tagName !== 'INPUT') {
     e.preventDefault();
     searchInput.focus();
@@ -2709,6 +2834,150 @@ window.addEventListener('keydown', (e) => {
     if (document.body.classList.contains('detail-open')) closeContactDetail();
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// People review (flashcards) — on-demand walk through high-signal contacts.
+// Skip: move on, DO NOT mark reviewed. Next: mark reviewed + load next.
+// ═══════════════════════════════════════════════════════════════════════════
+state.review = { open: false, skip: 0, current: null, loading: false };
+
+async function loadReviewDueCount() {
+  const el = document.getElementById('review-due-count');
+  if (!el) return;
+  try {
+    const { count } = await api('/api/people/review/due?days=30');
+    if (!count) { el.textContent = ''; el.classList.remove('has'); return; }
+    el.textContent = count + ' due';
+    el.title = `${count} reviewable ${count === 1 ? 'person hasn\'t' : 'people haven\'t'} been reviewed in 30+ days`;
+    el.classList.add('has');
+  } catch {
+    el.textContent = '';
+    el.classList.remove('has');
+  }
+}
+
+async function startReview() {
+  state.review.skip = 0;
+  state.review.open = true;
+  document.getElementById('review-overlay').classList.add('show');
+  await loadReviewPerson();
+}
+
+function endReview() {
+  state.review.open = false;
+  state.review.current = null;
+  document.getElementById('review-overlay').classList.remove('show');
+  loadReviewDueCount();
+}
+
+async function loadReviewPerson() {
+  if (state.review.loading) return;
+  state.review.loading = true;
+  renderReviewLoading();
+  try {
+    const { person } = await api('/api/people/review/next?skip=' + state.review.skip);
+    state.review.current = person;
+    renderReviewPerson();
+  } catch (e) {
+    toast('Review failed: ' + e.message, 'err');
+    endReview();
+  } finally {
+    state.review.loading = false;
+  }
+}
+
+function renderReviewLoading() {
+  document.getElementById('review-name').textContent = 'Loading…';
+  document.getElementById('review-meta').textContent = '';
+  document.getElementById('review-body').innerHTML = '<div class="review-empty">Loading…</div>';
+}
+
+function renderReviewPerson() {
+  const p = state.review.current;
+  const nameEl = document.getElementById('review-name');
+  const metaEl = document.getElementById('review-meta');
+  const body   = document.getElementById('review-body');
+  if (!p) {
+    nameEl.textContent = 'All caught up';
+    metaEl.textContent = '';
+    body.innerHTML = `<div class="review-empty">
+      No more people to review. Nicely done.<br><br>
+      <button class="btn ghost small" onclick="endReview()">Close</button>
+    </div>`;
+    return;
+  }
+  nameEl.textContent = p.contact;
+  const bits = [];
+  const last = p.stats?.last_contact_date;
+  if (last) bits.push('last contact ' + daysAgo(last));
+  if (p.last_reviewed_at) bits.push('reviewed ' + daysAgo(p.last_reviewed_at.slice(0, 10)));
+  else bits.push('never reviewed');
+  bits.push('#' + (state.review.skip + 1));
+  metaEl.textContent = bits.join(' · ');
+
+  const sections = [];
+  // Profile (user-authored)
+  const prof = p.profile;
+  if (prof && (prof.relationship_type || prof.personality_notes || prof.practical_notes || prof.relationship_goals)) {
+    const parts = [];
+    if (prof.relationship_type) parts.push(`<b>${esc(prof.relationship_type)}</b>`);
+    if (prof.personality_notes) parts.push(esc(prof.personality_notes));
+    if (prof.practical_notes)   parts.push(esc(prof.practical_notes));
+    if (prof.relationship_goals) parts.push('<i>Goal:</i> ' + esc(prof.relationship_goals));
+    sections.push(`<div class="rv-section"><h4>Profile</h4><div class="rv-content">${parts.join('<br><br>')}</div></div>`);
+  }
+  // Gloss growth note
+  if (p.gloss?.growth_note) {
+    sections.push(`<div class="rv-section"><h4>Gloss — growth note</h4><div class="rv-content">${esc(p.gloss.growth_note)}</div></div>`);
+  }
+  // Upcoming special dates
+  if (Array.isArray(p.special_dates) && p.special_dates.length) {
+    const sd = p.special_dates
+      .map(d => `${d.month}/${d.day}${d.year ? '/' + d.year : ''} — ${esc(d.type)}${d.label ? ' (' + esc(d.label) + ')' : ''}`)
+      .join('<br>');
+    sections.push(`<div class="rv-section"><h4>Dates</h4><div class="rv-content">${sd}</div></div>`);
+  }
+  // Timeline snippet — top 4 entries
+  const tl = (p.timeline || []).slice(0, 4);
+  if (tl.length) {
+    const items = tl.map(t => {
+      const when = t.date || '';
+      if (t.kind === 'message') return `<div>${when} · <b>msg</b> · ${esc((t.data.text || '').slice(0, 120))}</div>`;
+      if (t.kind === 'email')   return `<div>${when} · <b>email</b> · ${esc(t.data.subject || '')}</div>`;
+      if (t.kind === 'call')    return `<div>${when} · <b>call</b> · ${esc(t.data.direction)} (${t.data.duration_seconds || 0}s)</div>`;
+      return `<div>${when}</div>`;
+    }).join('');
+    sections.push(`<div class="rv-section"><h4>Recent timeline</h4><div class="rv-content">${items}</div></div>`);
+  }
+  if (!sections.length) {
+    sections.push('<div class="rv-section"><div class="rv-content muted">No notes yet — just a name on the list.</div></div>');
+  }
+  body.innerHTML = sections.join('');
+}
+
+async function reviewNext() {
+  const p = state.review.current;
+  if (!p || !p.person_id) {
+    // Nothing to mark; just advance.
+    state.review.skip += 1;
+    await loadReviewPerson();
+    return;
+  }
+  try {
+    await api('/api/people/review/' + p.person_id + '/reviewed', { method: 'POST' });
+  } catch (e) {
+    toast('Could not mark reviewed: ' + e.message, 'err');
+    return;
+  }
+  // After marking, the current person drops to the end of the queue, so
+  // the row at the same `skip` is someone new — don't increment.
+  await loadReviewPerson();
+}
+
+async function reviewSkip() {
+  state.review.skip += 1;
+  await loadReviewPerson();
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Calendar settings — which calendars to sync
