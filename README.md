@@ -1,26 +1,77 @@
 # Comm's
 
-A local macOS tool that collects your daily iMessages and Gmail into a SQLite database so other apps can query it. No cloud, no AI — just a clean local record of who you talked to and about what.
+Comm's collects your daily iMessages and Gmail into a local SQLite database that your other personal apps can query. It runs as a lightweight background server on your Mac and exposes a dashboard for browsing history and triggering collection.
 
-## What it does
+The point isn't the dashboard — it's the database. Once Comm's is running, any other app you build can open `~/Library/Application Support/comms/comms.db` read-only and query exactly who you talked to, about what, and when — without touching iCloud, Google's servers, or any third-party service.
 
-- Reads iMessages from `~/Library/Messages/chat.db` (with your permission)
-- Fetches Gmail metadata (sender, subject, snippet — no full bodies) via the Gmail API
-- Resolves phone numbers to real names using your macOS Contacts
-- Filters out newsletters and automated emails — only real people
-- Stores everything in `~/Library/Application Support/comms/comms.db`
-- Dashboard at `http://localhost:3748` to view history and trigger collection
+![Comm's dashboard](screenshot.png)
+
+---
+
+## What it collects
+
+| Source | What's stored | What's skipped |
+|--------|--------------|----------------|
+| iMessages | Full message text, sender name, contact, timestamp | Attachments with no text, reactions/tapbacks |
+| Gmail | Sender, subject, snippet (first ~150 chars) | Full email bodies, newsletters, automated mail |
+
+Contact names are resolved locally from your macOS Contacts — phone numbers and Apple IDs are looked up in AddressBook before anything is stored. Only emails from real people (i.e. contacts you have, or addresses that don't look automated) are kept.
+
+Nothing leaves your machine.
+
+---
+
+## The database
+
+**`~/Library/Application Support/comms/comms.db`** — SQLite, WAL mode, safe to open read-only from any other process.
+
+```sql
+-- One row per collection run (one per day)
+runs(id, date, collected_at, status, messages_count, emails_count, error)
+
+-- Individual iMessages with full text
+messages(id, run_id, date, contact, handle_id, direction, sender, text, sent_at)
+
+-- Gmail metadata (no full bodies)
+emails(id, run_id, date, direction, contact, email_address, subject, snippet, account)
+
+-- Connected Gmail accounts (OAuth tokens, stored locally)
+gmail_accounts(id, email, token_json, added_at)
+```
+
+Example query from another app:
+
+```js
+const Database = require('better-sqlite3');
+const db = new Database(
+  require('os').homedir() + '/Library/Application Support/comms/comms.db',
+  { readonly: true }
+);
+
+// Everyone I texted this week
+const contacts = db.prepare(`
+  SELECT contact, COUNT(*) AS messages
+  FROM messages
+  WHERE date >= date('now', '-7 days')
+  GROUP BY contact
+  ORDER BY messages DESC
+`).all();
+```
+
+---
 
 ## Requirements
 
-- **macOS** (uses macOS-specific databases for iMessages and Contacts)
+- **macOS** — uses macOS-specific databases for iMessages and Contacts
 - **Node.js** 18+
-- **Full Disk Access** for your terminal (for iMessages — see below)
-- **Google OAuth credentials** (for Gmail — optional)
+- **Full Disk Access** for your terminal app (to read iMessages)
+- **Google OAuth credentials** (only if you want Gmail — optional)
+
+---
 
 ## Setup
 
-### 1. Install
+### 1. Clone and install
 
 ```bash
 git clone https://github.com/nathan0colestock-code/comms.git
@@ -35,15 +86,20 @@ cp .env.example .env
 ```
 
 For Gmail, fill in `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`:
-- Go to [console.cloud.google.com](https://console.cloud.google.com)
-- APIs & Services → Credentials → Create OAuth 2.0 Client ID → Web application
-- Add `http://localhost:3748/api/gmail/callback` as an authorized redirect URI
 
-### 3. Grant Full Disk Access (for iMessages)
+1. Go to [console.cloud.google.com](https://console.cloud.google.com)
+2. **APIs & Services → Credentials → Create OAuth 2.0 Client ID**
+3. Application type: **Web application**
+4. Add `http://localhost:3748/api/gmail/callback` as an authorized redirect URI
+5. Copy the client ID and secret into `.env`
 
-System Settings → Privacy & Security → Full Disk Access → add your terminal app (Terminal, iTerm, etc.).
+If you don't want Gmail, leave those fields blank — iMessages will still work.
 
-If you're running the server from within another app (e.g. an IDE), you may need to add that app instead.
+### 3. Grant Full Disk Access (required for iMessages)
+
+**System Settings → Privacy & Security → Full Disk Access** — add your terminal app (Terminal, iTerm2, etc.).
+
+> If you run the server from inside another app (VS Code, an IDE, etc.), grant Full Disk Access to that app instead — the permission applies to whichever process launches `node`.
 
 ### 4. Start the server
 
@@ -51,40 +107,45 @@ If you're running the server from within another app (e.g. an IDE), you may need
 npm start
 ```
 
-Dashboard: [http://localhost:3748](http://localhost:3748)
+Dashboard opens at **[http://localhost:3748](http://localhost:3748)**.
 
 ### 5. Connect Gmail (optional)
 
-Click **+ Gmail** in the dashboard and complete the OAuth flow. If Google shows a warning screen, click **Advanced → Go to app (unsafe)** — expected for unverified apps.
+Click **+ Gmail** in the dashboard header and complete the OAuth flow. If Google shows an "app not verified" warning screen, click **Advanced → Go to app (unsafe)** — this is expected for OAuth apps you've created yourself that haven't gone through Google's verification process.
 
 ### 6. Collect
 
-- **Today** — collects today's messages and emails
-- **Catch up** — collects all days since the last run (up to today)
-- Or run from the CLI: `node collect.js 2026-04-22`
+- **Today** button — collects today's messages and emails right now
+- **Catch up** button — collects every day since the last successful run, sequentially
+- **CLI**: `node collect.js 2026-04-15` — collect a specific date
 
-## Database
+For automated daily collection, add a cron job or launchd agent that runs `node collect.js` once per night.
 
-The SQLite database lives at `~/Library/Application Support/comms/comms.db`. Other apps can open it read-only with any SQLite client.
+---
 
-### Schema
+## Integration API
 
-```sql
--- One row per collection run
-runs(id, date, collected_at, status, messages_count, emails_count, error)
+The server also exposes a small REST API for other apps:
 
--- Individual iMessages with full text
-messages(id, run_id, date, contact, handle_id, direction, sender, text, sent_at)
-
--- Gmail metadata (no full bodies)
-emails(id, run_id, date, direction, contact, email_address, subject, snippet, account)
-
--- Connected Gmail accounts (tokens stored locally)
-gmail_accounts(id, email, token_json, added_at)
 ```
+GET  /api/runs               — list recent runs (last 60 days)
+GET  /api/runs/:date         — full detail for a date (messages + emails)
+POST /api/collect/:date      — trigger collection for a specific date
+GET  /api/gmail/accounts     — list connected Gmail accounts
+```
+
+Example — fetch today's communications from another Node.js app:
+
+```js
+const res = await fetch('http://localhost:3748/api/runs/2026-04-22');
+const { messages, emails } = await res.json();
+```
+
+---
 
 ## Privacy
 
-- iMessage text is stored locally in your own SQLite file — nothing leaves your machine
-- Gmail: only metadata is fetched (sender, subject, snippet). Full email bodies are never stored
-- Contacts: resolved locally from your macOS AddressBook — no external lookups
+- **iMessages**: text is stored in your local SQLite file only — nothing is transmitted anywhere
+- **Gmail**: only metadata is fetched (sender, subject, snippet). Full message bodies are never requested or stored
+- **Contacts**: resolved locally from your macOS AddressBook — no external API calls
+- **No AI, no cloud, no analytics** — the server has no outbound connections except to the Gmail API when you've connected an account
