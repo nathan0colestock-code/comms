@@ -92,11 +92,34 @@ describe('authentication', () => {
 // ---------------------------------------------------------------------------
 
 describe('GET /api/status', () => {
-  it('returns ok and db path', async () => {
+  it('returns ok, db path, and overview fields', async () => {
     const { status, body } = await req('/api/status', { headers: AUTH });
     assert.equal(status, 200);
     assert.equal(body.ok, true);
     assert.ok(typeof body.db === 'string');
+    // Overview fields
+    assert.ok(body.totals && typeof body.totals.total_messages === 'number');
+    assert.ok(body.calendar && typeof body.calendar.upcoming_count === 'number');
+    assert.ok(body.gloss && typeof body.gloss.total === 'number');
+    assert.ok(typeof body.gmail_accounts === 'number');
+  });
+});
+
+describe('GET /api/search', () => {
+  it('returns empty arrays for a blank query', async () => {
+    const { status, body } = await req('/api/search?q=', { headers: AUTH });
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(body.messages));
+    assert.ok(Array.isArray(body.emails));
+    assert.ok(Array.isArray(body.contacts));
+  });
+
+  it('returns empty arrays when there is no data', async () => {
+    const { status, body } = await req('/api/search?q=xyzzy', { headers: AUTH });
+    assert.equal(status, 200);
+    assert.equal(body.messages.length, 0);
+    assert.equal(body.emails.length, 0);
+    assert.equal(body.contacts.length, 0);
   });
 });
 

@@ -1090,6 +1090,79 @@ function dismissNudge(contact) {
   } finally { db.close(); }
 }
 
+// ---------------------------------------------------------------------------
+// Overview — one snapshot for the "Status" surface
+// ---------------------------------------------------------------------------
+function getOverview() {
+  const db = openDb();
+  try {
+    const lastRun = db.prepare(`SELECT * FROM runs WHERE status='done' ORDER BY date DESC LIMIT 1`).get() || null;
+    const totals = db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM messages) AS total_messages,
+        (SELECT COUNT(*) FROM emails)   AS total_emails,
+        (SELECT COUNT(*) FROM runs WHERE status='done') AS total_runs
+    `).get();
+    const calendarInfo = db.prepare(`
+      SELECT MAX(synced_at) AS last_synced, COUNT(*) AS upcoming_count
+      FROM calendar_events WHERE date >= date('now')
+    `).get() || {};
+    const glossInfo = db.prepare(`
+      SELECT MAX(synced_at) AS last_pushed, COUNT(*) AS total, SUM(CASE WHEN priority >= 1 THEN 1 ELSE 0 END) AS priority
+      FROM gloss_contacts
+    `).get() || {};
+    const gmailAccounts = db.prepare(`SELECT COUNT(*) AS n FROM gmail_accounts`).get()?.n || 0;
+    return {
+      last_run: lastRun,
+      totals,
+      calendar: {
+        last_synced: calendarInfo.last_synced || null,
+        upcoming_count: calendarInfo.upcoming_count || 0,
+      },
+      gloss: {
+        last_pushed: glossInfo.last_pushed || null,
+        total: glossInfo.total || 0,
+        priority: glossInfo.priority || 0,
+      },
+      gmail_accounts: gmailAccounts,
+    };
+  } finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// Message / email search across all runs
+// ---------------------------------------------------------------------------
+function searchAll(query, { limit = 25 } = {}) {
+  const q = String(query || '').trim();
+  if (!q) return { messages: [], emails: [], contacts: [] };
+  const db = openDb();
+  try {
+    const pattern = `%${q}%`;
+    const messages = db.prepare(`
+      SELECT id, date, contact, sender, direction, text, sent_at
+      FROM messages WHERE text LIKE ? COLLATE NOCASE
+      ORDER BY sent_at DESC LIMIT ?
+    `).all(pattern, limit);
+    const emails = db.prepare(`
+      SELECT id, date, contact, email_address, direction, subject, snippet, account
+      FROM emails WHERE subject LIKE ? COLLATE NOCASE OR snippet LIKE ? COLLATE NOCASE
+      ORDER BY rowid DESC LIMIT ?
+    `).all(pattern, pattern, limit);
+    // Distinct contacts with at least one message or email.
+    const contacts = db.prepare(`
+      SELECT contact FROM (
+        SELECT contact FROM messages WHERE contact LIKE ? COLLATE NOCASE
+        UNION
+        SELECT contact FROM emails   WHERE contact LIKE ? COLLATE NOCASE
+        UNION
+        SELECT contact FROM gloss_contacts WHERE contact LIKE ? COLLATE NOCASE
+      )
+      LIMIT ?
+    `).all(pattern, pattern, pattern, limit).map(r => r.contact);
+    return { messages, emails, contacts };
+  } finally { db.close(); }
+}
+
 module.exports = {
   collect, getRuns, getRunDetail, getMissingDates,
   getGmailAccounts, saveGmailAccount, deleteGmailAccount, saveGmailTokens,
@@ -1102,6 +1175,8 @@ module.exports = {
   getMeetingBrief, saveMeetingBrief,
   // Nudges
   getNudges, dismissNudge, isoWeekOf,
+  // Overview + search
+  getOverview, searchAll,
   DB_PATH,
   // Exported for testing
   extractTextFromAttributedBody, normalizePhone, isRealPersonEmail,
