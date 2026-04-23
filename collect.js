@@ -1200,18 +1200,29 @@ function getContactDetail(name, { recentLimit = 50 } = {}) {
 
     // Calendar events where this contact appears as an attendee. Match by any
     // known name variant OR any known email address for the contact.
+    // SQL LIKE is a broad pre-filter; JS post-filter requires an exact attendee
+    // name or email match to prevent false positives (e.g. "Tom Dodds" matching
+    // the "Dodds" name variant of "Elianna Dodds").
     const calLikes = names.map(n => `%${n.toLowerCase()}%`);
     for (const addr of emailAddrs) {
       if (addr) calLikes.push(`%${addr.toLowerCase()}%`);
     }
+    const nameLower = new Set(names.map(n => n.toLowerCase()));
+    const addrLower = new Set([...emailAddrs].filter(Boolean).map(a => a.toLowerCase()));
     const calWhere = calLikes.map(() => 'lower(attendees) LIKE ?').join(' OR ');
     const calendarEvents = db.prepare(`
       SELECT id, date, start_time, end_time, title, attendees, html_link
       FROM calendar_events
       WHERE ${calWhere}
       ORDER BY date DESC, start_time DESC
-      LIMIT 30
-    `).all(...calLikes).map(hydrateEvent);
+      LIMIT 100
+    `).all(...calLikes).map(hydrateEvent).filter(ev => {
+      return ev.attendees.some(a => {
+        if (a.email && addrLower.has(a.email.toLowerCase())) return true;
+        if (a.name && nameLower.has(a.name.toLowerCase())) return true;
+        return false;
+      });
+    }).slice(0, 30);
 
     const glossNotes = db.prepare(`
       SELECT id, date, note, collection, gloss_url
