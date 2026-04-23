@@ -919,8 +919,11 @@ function deleteGmailAccount(id) {
 function saveGmailTokens(id, tokens) {
   const db = openDb();
   try {
-    db.prepare('UPDATE gmail_accounts SET token_json = ? WHERE id = ?')
+    const info = db.prepare('UPDATE gmail_accounts SET token_json = ? WHERE id = ?')
       .run(JSON.stringify(tokens), id);
+    if (info.changes === 0) {
+      throw new Error(`saveGmailTokens: no gmail_accounts row matched id=${id}`);
+    }
   } finally { db.close(); }
 }
 

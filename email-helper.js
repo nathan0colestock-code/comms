@@ -286,7 +286,7 @@ async function runEmailHelper({ db, getGmailAccountsWithTokens, saveGmailTokens 
     try {
       const r = await runForAccount(acct, db);
       if (r.refreshed_tokens) {
-        try { saveGmailTokens(acct.email, { ...JSON.parse(acct.token_json), ...r.refreshed_tokens }); } catch {}
+        try { saveGmailTokens(acct.id, { ...JSON.parse(acct.token_json), ...r.refreshed_tokens }); } catch {}
       }
       perAccount.push(r);
     } catch (err) {
