@@ -8,7 +8,7 @@
     "start": "node server.js",
     "collect": "node collect.js",
     "mcp": "node mcp.js",
-    "test": "node --test test/unit.test.js test/db.test.js test/api.test.js"
+    "test": "node --test test/unit.test.js test/db.test.js test/api.test.js test/mcp.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
