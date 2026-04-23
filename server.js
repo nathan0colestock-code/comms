@@ -60,15 +60,25 @@ const { fetchCalendarEvents, fetchCalendarList } = require('./calendar');
 
 const PORT = parseInt(process.env.PORT || '3748', 10);
 const IS_PROD = process.env.NODE_ENV === 'production';
+// Bind localhost-only outside prod — this app also runs as a LaunchAgent
+// and holds Gmail refresh tokens. Leaking to the LAN via 0.0.0.0 is not
+// acceptable for a single-user personal service.
+const BIND_HOST = IS_PROD ? '0.0.0.0' : (process.env.BIND_HOST || '127.0.0.1');
 
 // ─── App / middleware ───────────────────────────────────────────────────────
 const app = express();
-app.set('trust proxy', 1);
+// Only trust the reverse proxy's X-Forwarded-For header in prod (Fly). Locally
+// this would let any client spoof req.ip and sidestep the login rate limiter.
+if (IS_PROD) app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: false, limit: '2mb' }));
 
 // ─── Auth ───────────────────────────────────────────────────────────────────
+// Dev fallback is retained for LaunchAgent compatibility but the socket now
+// binds to 127.0.0.1 (see BIND_HOST above), so "dev"/"dev" can't be abused
+// from the LAN. Remove the fallback once AUTH_PASSWORD/SESSION_SECRET are
+// provisioned locally (e.g. via `op run`).
 let AUTH_PASSWORD  = process.env.AUTH_PASSWORD;
 let SESSION_SECRET = process.env.SESSION_SECRET;
 if (IS_PROD) {
@@ -77,8 +87,8 @@ if (IS_PROD) {
     process.exit(1);
   }
 } else {
-  if (!AUTH_PASSWORD)  { AUTH_PASSWORD  = 'dev'; console.warn('\x1b[33m[auth] AUTH_PASSWORD unset — using dev fallback "dev"\x1b[0m'); }
-  if (!SESSION_SECRET) { SESSION_SECRET = 'dev'; console.warn('\x1b[33m[auth] SESSION_SECRET unset — using dev fallback "dev"\x1b[0m'); }
+  if (!AUTH_PASSWORD)  { AUTH_PASSWORD  = 'dev'; console.warn('\x1b[33m[auth] AUTH_PASSWORD unset — using dev fallback "dev" (localhost only)\x1b[0m'); }
+  if (!SESSION_SECRET) { SESSION_SECRET = 'dev'; console.warn('\x1b[33m[auth] SESSION_SECRET unset — using dev fallback "dev" (localhost only)\x1b[0m'); }
 }
 const COOKIE_NAME = 'comms_auth';
 const COOKIE_MAX_AGE_MS = 30 * 24 * 3600 * 1000;
@@ -342,9 +352,27 @@ app.get('/api/gmail/callback', async (req, res) => {
   }
 });
 
+// Irreversible — wipes the refresh token and requires reauth across Gmail,
+// Calendar, and Contacts scopes. Require the caller to echo the account's
+// email in the body so a stray script or confused UI can't nuke an account
+// silently.
 app.delete('/api/gmail/accounts/:id', (req, res) => {
-  try { deleteGmailAccount(req.params.id); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  try {
+    const accounts = getGmailAccounts();
+    const account = accounts.find(a => String(a.id) === String(req.params.id));
+    if (!account) return res.status(404).json({ error: 'not found' });
+    const confirm = (req.body && typeof req.body.confirm_email === 'string')
+      ? req.body.confirm_email.trim().toLowerCase()
+      : '';
+    if (confirm !== String(account.email || '').toLowerCase()) {
+      return res.status(400).json({
+        error: 'confirmation required',
+        detail: 'pass confirm_email matching the account email in the body',
+      });
+    }
+    deleteGmailAccount(req.params.id);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ─── Debug (existing) ───────────────────────────────────────────────────────
@@ -1166,8 +1194,8 @@ async function pollCalendar() {
 
 // ─── Boot ───────────────────────────────────────────────────────────────────
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`Comm's  →  http://localhost:${PORT}`);
+  app.listen(PORT, BIND_HOST, () => {
+    console.log(`Comm's  →  http://${BIND_HOST}:${PORT}`);
     console.log(`DB      →  ${DB_PATH}`);
     // Kick off calendar polling on boot and every 30 min thereafter.
     setImmediate(() => pollCalendar().then(n => n && console.log(`[calendar] synced ${n} events`)).catch(() => {}));
