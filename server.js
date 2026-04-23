@@ -74,24 +74,10 @@ app.get('/api/runs/:date', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/collect/:date', async (req, res) => {
-  const { date } = req.params;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'Invalid date' });
-  if (jobs.get(date)?.running) return res.status(409).json({ error: 'Already running' });
-
-  const log = [];
-  jobs.set(date, { running: true, log, startedAt: new Date().toISOString() });
-
-  collect(date, { onProgress: e => log.push({ ...e, at: new Date().toISOString() }) })
-    .then(() => { jobs.get(date).running = false; })
-    .catch(e => { if (jobs.get(date)) { jobs.get(date).running = false; jobs.get(date).error = e.message; } });
-
-  res.json({ ok: true, date });
-});
-
 // Collect all dates since last successful run (sequential, one day at a time)
+// Must be defined BEFORE /:date so Express doesn't match "catchup" as a date param
 app.post('/api/collect/catchup', async (req, res) => {
-  const dates = getMissingDates();
+  const dates = getMissingDates(req.body?.from);
   if (!dates.length) return res.json({ ok: true, dates: [], message: 'Already up to date' });
 
   res.json({ ok: true, dates });
@@ -108,6 +94,21 @@ app.post('/api/collect/catchup', async (req, res) => {
       if (jobs.get(date)) jobs.get(date).running = false;
     }
   })();
+});
+
+app.post('/api/collect/:date', async (req, res) => {
+  const { date } = req.params;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'Invalid date' });
+  if (jobs.get(date)?.running) return res.status(409).json({ error: 'Already running' });
+
+  const log = [];
+  jobs.set(date, { running: true, log, startedAt: new Date().toISOString() });
+
+  collect(date, { onProgress: e => log.push({ ...e, at: new Date().toISOString() }) })
+    .then(() => { jobs.get(date).running = false; })
+    .catch(e => { if (jobs.get(date)) { jobs.get(date).running = false; jobs.get(date).error = e.message; } });
+
+  res.json({ ok: true, date });
 });
 
 // ---------------------------------------------------------------------------

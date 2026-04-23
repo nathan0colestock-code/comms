@@ -445,17 +445,25 @@ function getRuns(limit = 60) {
 
 // Returns every ISO date from the day after the last successful run up to today.
 // Returns [] if nothing has been collected yet (caller can decide to collect from today).
-function getMissingDates() {
+function getMissingDates(from) {
   const db = openDb();
   try {
-    const last = db.prepare(`SELECT date FROM runs WHERE status='done' ORDER BY date DESC LIMIT 1`).get();
     const today = new Date().toISOString().slice(0, 10);
-    if (!last) return [today];
+    let startDate;
+    if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      startDate = from;
+    } else {
+      const last = db.prepare(`SELECT date FROM runs WHERE status='done' ORDER BY date DESC LIMIT 1`).get();
+      if (!last) return [today];
+      // day after last successful run
+      const cursor = new Date(last.date + 'T12:00:00Z');
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+      startDate = cursor.toISOString().slice(0, 10);
+    }
 
     const dates = [];
-    const cursor = new Date(last.date + 'T12:00:00Z');
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-    const end = new Date(today + 'T12:00:00Z');
+    const cursor = new Date(startDate + 'T12:00:00Z');
+    const end    = new Date(today + 'T12:00:00Z');
     while (cursor <= end) {
       dates.push(cursor.toISOString().slice(0, 10));
       cursor.setUTCDate(cursor.getUTCDate() + 1);
