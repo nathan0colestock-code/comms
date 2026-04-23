@@ -2775,6 +2775,136 @@ function getRecentSentMessagesForStyle(name, { limit = 20, days = 90 } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// People review (flashcard mode) — on-demand, never pushed.
+//
+// A "reviewable" person is one who matters: either they're a Gloss priority
+// contact (priority >= 1) OR they have at least 5 messages/emails on file.
+// Priority comes from gloss_contacts which is person-linked; activity is
+// name-based and folded in via a LEFT JOIN. Ordering: last_reviewed_at ASC
+// (NULL first) so people who have never been reviewed bubble to the top,
+// then least-recent-contact first to keep things fresh.
+//
+// Deliberately SQL-only so the algorithm is testable end-to-end.
+// ---------------------------------------------------------------------------
+
+const PEOPLE_REVIEW_ACTIVITY_THRESHOLD = 5;
+
+// Returns an ordered list of { person_id, display_name, last_reviewed_at }.
+// The caller (endpoint) walks the list by offset so Skip is O(1): no state
+// is persisted beyond last_reviewed_at.
+function listPeopleReviewQueue({ limit = 200 } = {}) {
+  const db = openDb();
+  try {
+    return db.prepare(`
+      WITH comm_counts AS (
+        SELECT contact, COUNT(*) AS n FROM (
+          SELECT contact FROM messages
+          UNION ALL
+          SELECT contact FROM emails
+        )
+        GROUP BY contact COLLATE NOCASE
+      ),
+      person_activity AS (
+        SELECT pn.person_id, SUM(COALESCE(cc.n, 0)) AS n
+        FROM people_names pn
+        LEFT JOIN comm_counts cc ON cc.contact = pn.name COLLATE NOCASE
+        GROUP BY pn.person_id
+      ),
+      person_priority AS (
+        SELECT person_id, MAX(priority) AS priority
+        FROM gloss_contacts
+        WHERE person_id IS NOT NULL
+        GROUP BY person_id
+      )
+      SELECT
+        p.id AS person_id,
+        p.display_name,
+        p.last_reviewed_at,
+        COALESCE(pp.priority, 0) AS priority,
+        COALESCE(pa.n, 0) AS activity_count
+      FROM people p
+      LEFT JOIN person_priority pp ON pp.person_id = p.id
+      LEFT JOIN person_activity pa ON pa.person_id = p.id
+      WHERE COALESCE(pp.priority, 0) >= 1
+         OR COALESCE(pa.n, 0) >= ?
+      ORDER BY
+        (p.last_reviewed_at IS NULL) DESC,
+        p.last_reviewed_at ASC,
+        p.display_name COLLATE NOCASE ASC
+      LIMIT ?
+    `).all(PEOPLE_REVIEW_ACTIVITY_THRESHOLD, limit);
+  } finally { db.close(); }
+}
+
+// Returns the next person to review at offset `skip`, with the same shape as
+// getContactDetail(name) so the UI can render a single code path. Returns
+// null when the queue is exhausted.
+function getPeopleReviewNext({ skip = 0 } = {}) {
+  const queue = listPeopleReviewQueue({ limit: skip + 1 });
+  const row = queue[skip];
+  if (!row) return null;
+  const detail = getContactDetail(row.display_name);
+  return {
+    ...detail,
+    person_id: row.person_id,
+    last_reviewed_at: row.last_reviewed_at,
+    queue_position: skip,
+    queue_total: queue.length, // capped at skip+1 for speed; callers that
+                               // need a total should use countPeopleReview.
+  };
+}
+
+function markPersonReviewed(person_id) {
+  if (!person_id) throw new Error('markPersonReviewed: person_id required');
+  const db = openDb();
+  try {
+    const now = new Date().toISOString();
+    const res = db.prepare(
+      'UPDATE people SET last_reviewed_at = ?, updated_at = ? WHERE id = ?'
+    ).run(now, now, person_id);
+    return { ok: res.changes > 0, last_reviewed_at: now };
+  } finally { db.close(); }
+}
+
+// Count of reviewable people whose last_reviewed_at is older than N days
+// (or null). Used by the ambient "N haven't been reviewed in 30+ days" chip.
+function countPeopleDueForReview({ days = 30 } = {}) {
+  const db = openDb();
+  try {
+    const row = db.prepare(`
+      WITH comm_counts AS (
+        SELECT contact, COUNT(*) AS n FROM (
+          SELECT contact FROM messages
+          UNION ALL
+          SELECT contact FROM emails
+        )
+        GROUP BY contact COLLATE NOCASE
+      ),
+      person_activity AS (
+        SELECT pn.person_id, SUM(COALESCE(cc.n, 0)) AS n
+        FROM people_names pn
+        LEFT JOIN comm_counts cc ON cc.contact = pn.name COLLATE NOCASE
+        GROUP BY pn.person_id
+      ),
+      person_priority AS (
+        SELECT person_id, MAX(priority) AS priority
+        FROM gloss_contacts
+        WHERE person_id IS NOT NULL
+        GROUP BY person_id
+      )
+      SELECT COUNT(*) AS n
+      FROM people p
+      LEFT JOIN person_priority pp ON pp.person_id = p.id
+      LEFT JOIN person_activity pa ON pa.person_id = p.id
+      WHERE (COALESCE(pp.priority, 0) >= 1 OR COALESCE(pa.n, 0) >= ?)
+        AND (p.last_reviewed_at IS NULL
+             OR p.last_reviewed_at < datetime('now', ?))
+    `).get(PEOPLE_REVIEW_ACTIVITY_THRESHOLD, `-${Math.max(1, Number(days) || 30)} days`);
+    return row?.n || 0;
+  } finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
 // Overview — one snapshot for the "Status" surface
 // ---------------------------------------------------------------------------
 function getOverview() {
@@ -2898,6 +3028,8 @@ module.exports = {
   listAddressBook, getAddressBookContact, findAddressBookByIdentifiers, addressBookStats,
   // People — canonical identity registry
   rebuildPeople, resolvePerson, getPerson, mergePeople, rejectMergePair, findDuplicateCandidates,
+  // People review (flashcards, on-demand)
+  listPeopleReviewQueue, getPeopleReviewNext, markPersonReviewed, countPeopleDueForReview,
   // App settings
   getSetting, saveSetting,
   // Special dates
