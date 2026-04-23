@@ -95,7 +95,62 @@ nav.nav { padding: 10px 10px 6px; display: flex; flex-direction: column; gap: 2p
 .nudge .days { font-size: 11px; color: var(--red); font-weight: 600; flex-shrink: 0; }
 .nudge .dismiss { color: var(--muted); padding: 0 2px; line-height: 1; }
 .nudge .dismiss:hover { color: var(--red); }
+.nudge .note { font-size: 11px; color: var(--text-dim); line-height: 1.35; margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.nudge { align-items: flex-start; }
+.nudge .body { flex: 1; min-width: 0; }
 .nudges-empty { font-size: 11px; color: var(--muted); padding: 4px 4px 8px; }
+
+/* ─── Skeleton loading ───────────────────────────────────────────────── */
+.sk-row { padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: center; }
+.sk-bubble { border-radius: 50%; width: 32px; height: 32px; flex-shrink: 0; background: var(--surface); }
+.sk-lines { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.sk-line { height: 10px; background: var(--surface); border-radius: 4px; }
+.sk-line.short { width: 45%; }
+.sk-line.mid   { width: 70%; }
+.sk-bubble, .sk-line {
+  background: linear-gradient(90deg, var(--surface) 0%, var(--surface-2) 50%, var(--surface) 100%);
+  background-size: 200% 100%;
+  animation: sk-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes sk-shimmer { 0%,100% { background-position: 200% 0; } 50% { background-position: -200% 0; } }
+
+/* ─── Search results dropdown ─────────────────────────────────────────── */
+.search-results {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0,0,0,0.35);
+  max-height: 70vh; overflow-y: auto; z-index: 40;
+  display: none;
+}
+.search-results.show { display: block; }
+.sr-group { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.sr-group:last-child { border-bottom: none; }
+.sr-group-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700;
+  color: var(--muted); padding: 6px 14px 4px;
+}
+.sr-row { padding: 8px 14px; font-size: 13px; cursor: pointer; display: flex; gap: 10px; align-items: baseline; }
+.sr-row:hover { background: var(--surface-2); }
+.sr-row .who { font-weight: 500; min-width: 0; flex-shrink: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sr-row .snip { color: var(--text-dim); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.sr-row .sr-date { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.sr-row .dir { color: var(--muted); font-size: 11px; font-weight: 700; width: 10px; flex-shrink: 0; }
+.sr-row .dir.received { color: var(--green); }
+.sr-row .dir.sent { color: var(--accent); }
+.sr-empty { padding: 14px; color: var(--muted); font-size: 12px; text-align: center; }
+
+/* ─── Contact row: inline gloss chips ─────────────────────────────────── */
+.contact-row .coll-chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+.contact-row .coll-chips .chip { padding: 1px 7px; font-size: 10px; border-radius: 999px; background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--border); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ─── Last-synced banner ──────────────────────────────────────────────── */
+.sync-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 14px; border-bottom: 1px solid var(--border);
+  font-size: 11px; color: var(--muted);
+}
+.sync-banner .right { display: flex; gap: 10px; align-items: center; }
+.sync-banner .stale { color: var(--yellow); }
 
 /* ─── Main content area ──────────────────────────────────────────────── */
 main.view {
@@ -396,6 +451,7 @@ main.view {
   <div class="brand">Comm's<span class="dot">.</span></div>
   <div class="search-wrap">
     <input id="search" type="search" placeholder="Search contacts, messages, emails…" autocomplete="off">
+    <div class="search-results" id="search-results"></div>
   </div>
   <div class="topbar-actions">
     <button class="icon-btn" id="settings-btn" title="Settings">⚙</button>
@@ -434,7 +490,13 @@ main.view {
     </section>
 
     <!-- Calendar view -->
-    <section id="view-calendar" class="view-section">
+    <section id="view-calendar" class="view-section" style="flex-direction:column">
+      <div class="sync-banner" id="cal-sync-banner" style="display:none">
+        <span id="cal-sync-label"></span>
+        <div class="right">
+          <button class="btn ghost small" onclick="pollCalendarNow()">Sync now</button>
+        </div>
+      </div>
       <div class="calendar-list" id="calendar-body">
         <div style="padding:40px 0;color:var(--muted);text-align:center;font-size:13px">Loading…</div>
       </div>
@@ -603,7 +665,23 @@ document.querySelectorAll('.nav-item').forEach(el => {
 // ═══════════════════════════════════════════════════════════════════════════
 // Contacts
 // ═══════════════════════════════════════════════════════════════════════════
+function skeletonRows(n = 6) {
+  let html = '';
+  for (let i = 0; i < n; i++) {
+    html += `<div class="sk-row">
+      <div class="sk-bubble"></div>
+      <div class="sk-lines">
+        <div class="sk-line mid"></div>
+        <div class="sk-line short"></div>
+      </div>
+    </div>`;
+  }
+  return html;
+}
+
 async function loadContacts() {
+  const el = document.getElementById('contact-list');
+  if (!state.contacts.length) el.innerHTML = skeletonRows();
   try {
     const { contacts } = await api('/api/contacts');
     state.contacts = contacts;
@@ -625,7 +703,17 @@ function renderContacts() {
   const nudgeSet = new Set(state.nudges.map(n => n.contact.toLowerCase()));
   const el = document.getElementById('contact-list');
   if (!list.length) {
-    el.innerHTML = '<div style="padding:20px;color:var(--muted);font-size:12px;text-align:center">No contacts yet.</div>';
+    if (q) {
+      el.innerHTML = `<div style="padding:20px;color:var(--muted);font-size:12px;text-align:center">
+        No people match "${esc(state.searchTerm)}".</div>`;
+    } else if (!state.contacts.length) {
+      el.innerHTML = `<div style="padding:24px 18px;color:var(--muted);font-size:13px;text-align:center;line-height:1.6">
+        <div style="font-size:28px;opacity:0.4;margin-bottom:6px">◉</div>
+        <b style="color:var(--text)">No contacts yet</b><br>
+        Run a collection to pull iMessages and emails.<br><br>
+        <button class="btn small" onclick="setView('daily');setTimeout(collectToday,100)">Collect today</button>
+      </div>`;
+    }
     return;
   }
   el.innerHTML = list.map(c => {
@@ -637,11 +725,16 @@ function renderContacts() {
     const nudgeBadge = nudgeSet.has(c.contact.toLowerCase()) ? '<span class="nudge-pill">nudge</span>' : '';
     const starStr = prio ? `<span class="stars">${stars(prio)}</span>` : '';
     const glossDot = hasGloss && !prio ? '<span class="dot" title="In notebook"></span>' : '';
+    const totalComms = c.message_count + c.email_count;
+    const metaStr = totalComms ? `${totalComms} · ${last}` : (hasGloss ? 'no comms yet' : last);
+    const chips = (c.gloss?.linked_collections || []).slice(0, 3)
+      .map(title => `<span class="chip">${esc(title)}</span>`).join('');
     return `<div class="contact-row ${active}" onclick="selectContact('${esc(c.contact).replace(/'/g,"\\'")}')">
       <div class="${avatarCls}">${esc(initials(c.contact))}</div>
       <div class="main">
         <div class="name">${glossDot}${esc(c.contact)} ${starStr}</div>
-        <div class="meta">${c.message_count + c.email_count} msg · ${last}</div>
+        <div class="meta">${metaStr}</div>
+        ${chips ? `<div class="coll-chips">${chips}</div>` : ''}
       </div>
       ${nudgeBadge}
     </div>`;
@@ -824,13 +917,17 @@ function renderNudges() {
     el.innerHTML = '<div class="nudges-empty">Nothing overdue.</div>';
     return;
   }
-  el.innerHTML = state.nudges.map(n => `
-    <div class="nudge" onclick="selectNudge('${esc(n.contact).replace(/'/g,"\\'")}')">
-      <div class="name">${esc(n.contact)}</div>
+  el.innerHTML = state.nudges.map(n => {
+    const note = n.growth_note ? `<div class="note">${esc(n.growth_note)}</div>` : '';
+    return `<div class="nudge" onclick="selectNudge('${esc(n.contact).replace(/'/g,"\\'")}')">
+      <div class="body">
+        <div class="name">${esc(n.contact)}</div>
+        ${note}
+      </div>
       <div class="days">${n.days_since_contact}d</div>
       <button class="dismiss" onclick="event.stopPropagation();dismissNudge('${esc(n.contact).replace(/'/g,"\\'")}')" title="Dismiss">×</button>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 }
 
 function selectNudge(name) {
@@ -859,11 +956,38 @@ async function loadCalendar() {
     state.events = events;
     document.getElementById('count-calendar').textContent = events.length;
     renderCalendar();
+    renderCalSyncBanner();
   } catch (e) {
     body.innerHTML = `<div style="padding:40px 0;color:var(--muted);text-align:center;font-size:13px">
       Couldn't load: ${esc(e.message)}<br><br>
       <button class="btn small ghost" onclick="pollCalendarNow()">Sync now</button>
     </div>`;
+  }
+}
+
+async function renderCalSyncBanner() {
+  try {
+    const status = await api('/api/status');
+    const banner = document.getElementById('cal-sync-banner');
+    const label  = document.getElementById('cal-sync-label');
+    const last = status.calendar?.last_synced;
+    if (!last) {
+      banner.style.display = 'flex';
+      label.innerHTML = '<span class="stale">Never synced</span>';
+      return;
+    }
+    const ageMs = Date.now() - new Date(last).getTime();
+    const hours = ageMs / 3_600_000;
+    const ago = hours < 1
+      ? `${Math.max(1, Math.round(ageMs/60000))}m ago`
+      : hours < 24
+        ? `${Math.round(hours)}h ago`
+        : `${Math.round(hours/24)}d ago`;
+    const stale = hours > 6 ? ' stale' : '';
+    banner.style.display = 'flex';
+    label.innerHTML = `<span class="${stale.trim()}">Last synced ${ago}</span>`;
+  } catch {
+    document.getElementById('cal-sync-banner').style.display = 'none';
   }
 }
 
@@ -1234,24 +1358,109 @@ function closeModal(id) { document.getElementById(id).classList.remove('show'); 
 document.getElementById('settings-btn').addEventListener('click', () => openModal('settings-modal'));
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Search (debounced)
+// Search (debounced) — dual-mode:
+//   1. Local filter of contact list (by name + aliases)
+//   2. Async fetch across messages + emails + all contacts, shown in a
+//      dropdown below the search box.
+// Empty query closes the dropdown and restores the full contact list.
 // ═══════════════════════════════════════════════════════════════════════════
 let searchDebounce = null;
-document.getElementById('search').addEventListener('input', (e) => {
+let searchToken = 0;
+const searchInput   = document.getElementById('search');
+const searchResults = document.getElementById('search-results');
+
+function closeSearchDropdown() {
+  searchResults.classList.remove('show');
+  searchResults.innerHTML = '';
+}
+
+function openSearchDropdown(html) {
+  searchResults.innerHTML = html;
+  searchResults.classList.add('show');
+}
+
+async function runCrossSearch(q) {
+  const token = ++searchToken;
+  openSearchDropdown(`<div class="sr-empty">Searching…</div>`);
+  try {
+    const r = await api('/api/search?q=' + encodeURIComponent(q) + '&limit=12');
+    if (token !== searchToken) return; // stale
+    const groups = [];
+    if (r.contacts?.length) {
+      groups.push(`<div class="sr-group"><div class="sr-group-label">People (${r.contacts.length})</div>` +
+        r.contacts.slice(0, 8).map(name =>
+          `<div class="sr-row" onclick="pickSearchContact(${JSON.stringify(name)})">
+            <span class="who">${esc(name)}</span>
+          </div>`).join('') + `</div>`);
+    }
+    if (r.messages?.length) {
+      groups.push(`<div class="sr-group"><div class="sr-group-label">iMessages (${r.messages.length})</div>` +
+        r.messages.slice(0, 10).map(m =>
+          `<div class="sr-row" onclick="pickSearchContact(${JSON.stringify(m.contact)})">
+            <span class="dir ${m.direction}">${m.direction === 'received' ? '↓' : '↑'}</span>
+            <span class="who">${esc(m.contact)}</span>
+            <span class="snip">${esc((m.text || '').slice(0, 120))}</span>
+            <span class="sr-date">${esc(m.date || '')}</span>
+          </div>`).join('') + `</div>`);
+    }
+    if (r.emails?.length) {
+      groups.push(`<div class="sr-group"><div class="sr-group-label">Emails (${r.emails.length})</div>` +
+        r.emails.slice(0, 10).map(m =>
+          `<div class="sr-row" onclick="pickSearchContact(${JSON.stringify(m.contact)})">
+            <span class="dir ${m.direction}">${m.direction === 'received' ? '↓' : '↑'}</span>
+            <span class="who">${esc(m.contact)}</span>
+            <span class="snip">${esc(m.subject || '')}${m.snippet ? ' · ' + esc(m.snippet.slice(0, 90)) : ''}</span>
+            <span class="sr-date">${esc(m.date || '')}</span>
+          </div>`).join('') + `</div>`);
+    }
+    if (!groups.length) {
+      openSearchDropdown(`<div class="sr-empty">No matches for "${esc(q)}".</div>`);
+    } else {
+      openSearchDropdown(groups.join(''));
+    }
+  } catch (e) {
+    if (token === searchToken) openSearchDropdown(`<div class="sr-empty">Search error: ${esc(e.message)}</div>`);
+  }
+}
+
+function pickSearchContact(name) {
+  closeSearchDropdown();
+  searchInput.value = '';
+  state.searchTerm = '';
+  renderContacts();
+  if (state.view !== 'contacts') setView('contacts');
+  setTimeout(() => selectContact(name), 30);
+}
+
+searchInput.addEventListener('input', (e) => {
   state.searchTerm = e.target.value;
   clearTimeout(searchDebounce);
+  const q = e.target.value.trim();
+  // Always refresh the local contact filter immediately.
+  if (state.view === 'contacts') renderContacts();
+  if (!q) { closeSearchDropdown(); return; }
+  // Fire cross-search if the query is at least 2 chars.
   searchDebounce = setTimeout(() => {
-    if (state.view !== 'contacts') setView('contacts');
-    else renderContacts();
-  }, 150);
+    if (q.length < 2) { closeSearchDropdown(); return; }
+    runCrossSearch(q);
+  }, 200);
+});
+
+// Close on click outside
+document.addEventListener('click', (e) => {
+  if (!searchResults.contains(e.target) && e.target !== searchInput) closeSearchDropdown();
 });
 
 // Keyboard: / focuses search, Esc closes
 window.addEventListener('keydown', (e) => {
   if (e.key === '/' && document.activeElement.tagName !== 'INPUT') {
     e.preventDefault();
-    document.getElementById('search').focus();
+    searchInput.focus();
   } else if (e.key === 'Escape') {
+    if (searchResults.classList.contains('show')) {
+      closeSearchDropdown();
+      return;
+    }
     closeModal('settings-modal');
     if (document.body.classList.contains('detail-open')) closeContactDetail();
   }
