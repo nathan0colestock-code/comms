@@ -85,11 +85,11 @@ async function main() {
   process.stderr.write('Comms MCP server running\n');
 }
 
-main().catch(e => {
-  process.stderr.write(`Fatal: ${e.message}\n`);
-  process.exit(1);
-});
-
-if (require.main !== module) {
+if (require.main === module) {
+  main().catch(e => {
+    process.stderr.write(`Fatal: ${e.message}\n`);
+    process.exit(1);
+  });
+} else {
   module.exports = { handleSearchByContact, handleSearchByTopic };
 }
