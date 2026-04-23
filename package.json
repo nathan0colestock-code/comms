@@ -9,7 +9,6 @@
     "collect": "node collect.js"
   },
   "dependencies": {
-    "@google/genai": "^0.14.1",
     "better-sqlite3": "^11.10.0",
     "express": "^4.21.2",
     "googleapis": "^144.0.0"
