@@ -43,7 +43,7 @@ const {
   upsertCalendarEvents, pruneOldCalendarEvents, listCalendarEvents, getCalendarEvent,
   getMeetingBrief, saveMeetingBrief,
   getNudges, dismissNudge,
-  getContactProfile, saveContactProfile,
+  getContactProfile, saveContactProfile, renameContact,
   listAgendaItems, addAgendaItem, updateAgendaItem, deleteAgendaItem,
   listCustomPlaybookModels, getCustomPlaybookModel, saveCustomPlaybookModel, deleteCustomPlaybookModel,
   upsertAddressBookContact, pruneAddressBookAccount, recordAddressBookSync,
@@ -549,6 +549,15 @@ app.put('/api/contacts/:name/profile', (req, res) => {
   try {
     const profile = saveContactProfile(req.params.name, req.body || {});
     res.json({ ok: true, profile });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.put('/api/contacts/:name/rename', (req, res) => {
+  const newName = (req.body?.newName || '').trim();
+  if (!newName) return res.status(400).json({ error: 'newName is required' });
+  try {
+    const result = renameContact(req.params.name, newName);
+    res.json({ ok: true, ...result });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 

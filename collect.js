@@ -1338,6 +1338,82 @@ function saveContactProfile(name, patch = {}) {
   } finally { db.close(); }
 }
 
+// Rename a contact across all tables that key by contact name. The people
+// table display_name is updated only when it matches oldName exactly
+// (case-insensitive) so a manually-set display_name isn't clobbered.
+// The new name is added to people_names so search and de-dup still work.
+function renameContact(oldName, newName) {
+  if (!oldName || !newName) throw new Error('renameContact: both names required');
+  const trimmed = String(newName).trim();
+  if (!trimmed) throw new Error('renameContact: newName cannot be blank');
+  if (trimmed.toLowerCase() === String(oldName).trim().toLowerCase()) return { ok: true, noChange: true };
+
+  const db = openDb();
+  try {
+    const txn = db.transaction(() => {
+      const now = new Date().toISOString();
+
+      // Raw comms — simple column renames
+      db.prepare('UPDATE messages      SET contact  = ? WHERE contact  = ? COLLATE NOCASE').run(trimmed, oldName);
+      db.prepare('UPDATE emails        SET contact  = ? WHERE contact  = ? COLLATE NOCASE').run(trimmed, oldName);
+      db.prepare('UPDATE contacts      SET contact  = ? WHERE contact  = ? COLLATE NOCASE').run(trimmed, oldName);
+
+      // Agenda items (person-scoped)
+      db.prepare("UPDATE agenda_items SET scope_id = ? WHERE scope_type = 'person' AND scope_id = ? COLLATE NOCASE").run(trimmed, oldName);
+
+      // Special dates
+      db.prepare('UPDATE special_dates SET contact = ? WHERE contact = ? COLLATE NOCASE').run(trimmed, oldName);
+
+      // Nudge dismissals (composite PK — move rows rather than UPDATE)
+      const nudgeWeeks = db.prepare('SELECT week FROM nudge_dismissals WHERE contact = ? COLLATE NOCASE').all(oldName).map(r => r.week);
+      for (const week of nudgeWeeks) {
+        db.prepare('INSERT OR IGNORE INTO nudge_dismissals (contact, week) VALUES (?, ?)').run(trimmed, week);
+      }
+      db.prepare('DELETE FROM nudge_dismissals WHERE contact = ? COLLATE NOCASE').run(oldName);
+
+      // contact_aliases: rename alias rows; update canonical references
+      const aliasRow = db.prepare('SELECT canonical, reason, created_at FROM contact_aliases WHERE alias = ? COLLATE NOCASE').get(oldName);
+      if (aliasRow) {
+        db.prepare('INSERT OR REPLACE INTO contact_aliases (alias, canonical, reason, created_at) VALUES (?, ?, ?, ?)').run(trimmed, aliasRow.canonical, aliasRow.reason, aliasRow.created_at);
+        db.prepare('DELETE FROM contact_aliases WHERE alias = ? COLLATE NOCASE').run(oldName);
+      }
+      db.prepare('UPDATE contact_aliases SET canonical = ? WHERE canonical = ? COLLATE NOCASE').run(trimmed, oldName);
+
+      // contact_profiles (PK): if newName profile doesn't exist yet, rename; otherwise drop oldName copy
+      const hasOldProfile = !!db.prepare('SELECT 1 FROM contact_profiles WHERE contact = ? COLLATE NOCASE').get(oldName);
+      const hasNewProfile = !!db.prepare('SELECT 1 FROM contact_profiles WHERE contact = ? COLLATE NOCASE').get(trimmed);
+      if (hasOldProfile) {
+        if (!hasNewProfile) {
+          db.prepare('UPDATE contact_profiles SET contact = ?, updated_at = ? WHERE contact = ? COLLATE NOCASE').run(trimmed, now, oldName);
+        } else {
+          db.prepare('DELETE FROM contact_profiles WHERE contact = ? COLLATE NOCASE').run(oldName);
+        }
+      }
+
+      // contact_insights (PK): same PK-rename pattern
+      const hasOldInsight = !!db.prepare('SELECT 1 FROM contact_insights WHERE contact = ? COLLATE NOCASE').get(oldName);
+      const hasNewInsight = !!db.prepare('SELECT 1 FROM contact_insights WHERE contact = ? COLLATE NOCASE').get(trimmed);
+      if (hasOldInsight) {
+        if (!hasNewInsight) {
+          db.prepare('UPDATE contact_insights SET contact = ? WHERE contact = ? COLLATE NOCASE').run(trimmed, oldName);
+        } else {
+          db.prepare('DELETE FROM contact_insights WHERE contact = ? COLLATE NOCASE').run(oldName);
+        }
+      }
+
+      // people: update display_name only when it still matches oldName (case-insensitive)
+      const person = _resolvePersonRaw(db, oldName);
+      if (person) {
+        db.prepare('UPDATE people SET display_name = ?, updated_at = ? WHERE id = ? AND display_name = ? COLLATE NOCASE')
+          .run(trimmed, now, person.person_id, oldName);
+        db.prepare('INSERT OR IGNORE INTO people_names (person_id, name, source) VALUES (?, ?, ?)').run(person.person_id, trimmed, 'manual');
+      }
+    });
+    txn();
+    return { ok: true, oldName, newName: trimmed };
+  } finally { db.close(); }
+}
+
 // Counts + email subjects for the last N days, used as input to the AI.
 // Does NOT include message text.
 function getRecentCommsForAI(name, days = 30) {
@@ -2875,7 +2951,7 @@ module.exports = {
   // Nudges
   getNudges, dismissNudge, isoWeekOf,
   // User-authored contact profile
-  getContactProfile, saveContactProfile,
+  getContactProfile, saveContactProfile, renameContact,
   // Agenda items (person- and event-scoped)
   listAgendaItems, addAgendaItem, updateAgendaItem, deleteAgendaItem,
   // Custom playbook models

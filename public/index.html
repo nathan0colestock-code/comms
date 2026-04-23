@@ -704,6 +704,20 @@ a.tl-title:hover { color: var(--accent); text-decoration: underline; }
   </div>
 </div>
 
+<!-- Rename contact modal -->
+<div class="modal-backdrop" id="rename-modal" onclick="if(event.target===this)closeModal('rename-modal')">
+  <div class="modal" style="max-width:400px">
+    <h2>Rename contact</h2>
+    <label class="form-label">New name
+      <input type="text" id="rename-input" placeholder="Full name" autocomplete="off" />
+    </label>
+    <div class="modal-actions">
+      <button class="btn ghost small" onclick="closeModal('rename-modal')">Cancel</button>
+      <button class="btn small" id="rename-save-btn" onclick="saveRename()">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- Add special date modal -->
 <div class="modal-backdrop" id="add-date-modal" onclick="if(event.target===this)closeModal('add-date-modal')">
   <div class="modal" style="max-width:460px">
@@ -1233,6 +1247,7 @@ function renderContactDetail() {
       ${altNames.length ? `<div class="meta" style="margin-top:4px"><span class="timestamp">also</span> ${altNames.map(n => `<span class="chip chip-alias">${esc(n)}</span>`).join(' ')}</div>` : ''}
     </div>
     <div class="actions">
+      <button class="btn ghost small" onclick="openRenameModal()">Rename</button>
       <button class="btn ghost small" onclick="openDraftModal(${JSON.stringify(d.contact).replace(/"/g, '&quot;')}, 'check-in')">Draft message</button>
       ${g ? `<a class="btn" href="${esc(g.gloss_url)}" target="_blank" rel="noopener">Open in Gloss →</a>` : ''}
     </div>
@@ -1511,6 +1526,37 @@ async function saveProfileFromModal() {
     d.profile = profile;
     closeModal('profile-modal');
     renderContactDetail();
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save';
+  }
+}
+
+// ─── Rename contact ───────────────────────────────────────────────────────
+function openRenameModal() {
+  const d = state.contactDetail;
+  if (!d) return;
+  const input = document.getElementById('rename-input');
+  input.value = d.contact;
+  openModal('rename-modal');
+  // Select all so user can immediately type a replacement
+  setTimeout(() => { input.select(); }, 50);
+}
+
+async function saveRename() {
+  const d = state.contactDetail;
+  if (!d) return;
+  const newName = document.getElementById('rename-input').value.trim();
+  if (!newName) { alert('Name cannot be blank.'); return; }
+  const btn = document.getElementById('rename-save-btn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const result = await api(`/api/contacts/${encodeURIComponent(d.contact)}/rename`, 'PUT', { newName });
+    closeModal('rename-modal');
+    // Reload the contact list and navigate to the new name
+    await loadContacts();
+    await selectContact(result.newName || newName);
   } catch (e) {
     alert(e.message);
   } finally {
