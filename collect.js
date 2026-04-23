@@ -850,9 +850,20 @@ function getRunDetail(date) {
   } finally { db.close(); }
 }
 
-function getGmailAccounts() {
+// Internal variant — includes token_json for code that actually needs to
+// authenticate against Google APIs. Callers must NEVER return this shape
+// to clients. Use getGmailAccounts() for any /api/* response.
+function getGmailAccountsWithTokens() {
   const db = openDb();
   try { return db.prepare('SELECT id, email, token_json, added_at FROM gmail_accounts ORDER BY added_at').all(); }
+  finally { db.close(); }
+}
+
+function getGmailAccounts() {
+  const db = openDb();
+  // NEVER expose token_json in list results — OAuth tokens are secrets.
+  // Callers that need tokens should use getGmailTokens(id) explicitly.
+  try { return db.prepare('SELECT id, email, added_at FROM gmail_accounts ORDER BY added_at').all(); }
   finally { db.close(); }
 }
 
@@ -2971,7 +2982,7 @@ function searchAll(query, { limit = 25 } = {}) {
 
 module.exports = {
   collect, getRuns, getRunDetail, getMissingDates,
-  getGmailAccounts, saveGmailAccount, deleteGmailAccount, saveGmailTokens,
+  getGmailAccounts, getGmailAccountsWithTokens, saveGmailAccount, deleteGmailAccount, saveGmailTokens,
   testMessagesAccess,
   // Gloss profiles
   upsertGlossContact, getGlossContact, listContacts, getContactDetail, getRecentCommsForAI,
