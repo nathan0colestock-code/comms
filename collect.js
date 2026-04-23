@@ -2914,6 +2914,28 @@ function getOverview() {
 }
 
 // ---------------------------------------------------------------------------
+// Suite status metrics — a table-count rollup used by /api/status. Each count
+// is isolated in its own try/catch so a missing/renamed table never 500s the
+// health-check surface. Returns numbers (0 on error).
+// ---------------------------------------------------------------------------
+function getSuiteStatusMetrics() {
+  const db = openDb();
+  const count = (sql) => {
+    try { return db.prepare(sql).get()?.n || 0; }
+    catch { return 0; }
+  };
+  try {
+    return {
+      total_messages: count('SELECT COUNT(*) AS n FROM messages'),
+      total_emails:   count('SELECT COUNT(*) AS n FROM emails'),
+      total_runs:     count('SELECT COUNT(*) AS n FROM runs'),
+      gmail_accounts: count('SELECT COUNT(DISTINCT id) AS n FROM gmail_accounts'),
+      gloss_contacts: count('SELECT COUNT(*) AS n FROM gloss_contacts'),
+    };
+  } finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
 // Message / email search across all runs
 // ---------------------------------------------------------------------------
 function searchAll(query, { limit = 25 } = {}) {
@@ -2979,7 +3001,7 @@ module.exports = {
   // Sent message style samples
   getRecentSentMessagesForStyle,
   // Overview + search
-  getOverview, searchAll,
+  getOverview, getSuiteStatusMetrics, searchAll,
   DB_PATH,
   // Exported for testing
   extractTextFromAttributedBody, normalizePhone, isRealPersonEmail,

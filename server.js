@@ -49,7 +49,7 @@ const {
   upsertAddressBookContact, pruneAddressBookAccount, recordAddressBookSync,
   listAddressBook, getAddressBookContact, findAddressBookByIdentifiers, addressBookStats,
   rebuildPeople, resolvePerson, getPerson, mergePeople, rejectMergePair, findDuplicateCandidates,
-  getOverview, searchAll,
+  getOverview, getSuiteStatusMetrics, searchAll,
   getSetting, saveSetting,
   upsertSpecialDate, listUpcomingSpecialDates, listSpecialDates, deleteSpecialDate,
   getRecentSentMessagesForStyle,
@@ -129,14 +129,22 @@ function requireAuth(req, res, next) {
 }
 
 function requireApiKey(req) {
-  const key = process.env.API_KEY;
-  if (!key) return false;
+  // Accept either the app's own API_KEY or the shared SUITE_API_KEY. This
+  // lets suite-wide orchestration (status polling, cross-app calls) use a
+  // single credential without the per-app keys sprawling through the caller.
+  const appKey   = process.env.API_KEY || null;
+  const suiteKey = process.env.SUITE_API_KEY || null;
+  if (!appKey && !suiteKey) return false;
   const auth = req.headers['authorization'];
   const provided = (auth?.startsWith('Bearer ') ? auth.slice(7) : null) ?? req.headers['x-api-key'];
   if (!provided) return false;
   const a = Buffer.from(String(provided));
-  const b = Buffer.from(key);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  for (const k of [appKey, suiteKey]) {
+    if (!k) continue;
+    const b = Buffer.from(k);
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return true;
+  }
+  return false;
 }
 
 const LOGIN_RATE = new Map();
@@ -214,7 +222,27 @@ app.use(express.static(path.join(__dirname, 'public')));
 const jobs = new Map();
 
 // ─── Collection API (existing) ──────────────────────────────────────────────
+// Suite-wide status shape: a compact, stable envelope the orchestrator polls.
+// Metrics are best-effort — getSuiteStatusMetrics() already swallows per-table
+// errors so a partial schema still produces a 200. The old overview is still
+// available via the /api/overview alias below for any in-app consumers.
+const PKG_VERSION = (() => {
+  try { return require('./package.json').version || '0.0.0'; }
+  catch { return '0.0.0'; }
+})();
+
 app.get('/api/status', (req, res) => {
+  res.json({
+    app: 'comms',
+    version: PKG_VERSION,
+    ok: true,
+    uptime_seconds: Math.floor(process.uptime()),
+    metrics: getSuiteStatusMetrics(),
+  });
+});
+
+// Legacy overview surface — used by the in-app UI and older tests.
+app.get('/api/overview', (req, res) => {
   try { res.json({ ok: true, db: DB_PATH, ...getOverview() }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });

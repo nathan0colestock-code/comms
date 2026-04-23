@@ -99,12 +99,27 @@ describe('authentication', () => {
 // ---------------------------------------------------------------------------
 
 describe('GET /api/status', () => {
-  it('returns ok, db path, and overview fields', async () => {
+  it('returns the suite-status envelope with a bearer token', async () => {
     const { status, body } = await req('/api/status', { headers: AUTH });
+    assert.equal(status, 200);
+    assert.equal(body.app, 'comms');
+    assert.equal(body.ok, true);
+    assert.equal(typeof body.version, 'string');
+    assert.equal(typeof body.uptime_seconds, 'number');
+    assert.ok(body.uptime_seconds >= 0);
+    assert.ok(body.metrics && typeof body.metrics === 'object');
+    for (const k of ['total_messages', 'total_emails', 'total_runs', 'gmail_accounts', 'gloss_contacts']) {
+      assert.equal(typeof body.metrics[k], 'number', `metrics.${k} should be a number`);
+    }
+  });
+});
+
+describe('GET /api/overview', () => {
+  it('returns ok, db path, and overview fields', async () => {
+    const { status, body } = await req('/api/overview', { headers: AUTH });
     assert.equal(status, 200);
     assert.equal(body.ok, true);
     assert.ok(typeof body.db === 'string');
-    // Overview fields
     assert.ok(body.totals && typeof body.totals.total_messages === 'number');
     assert.ok(body.calendar && typeof body.calendar.upcoming_count === 'number');
     assert.ok(body.gloss && typeof body.gloss.total === 'number');
