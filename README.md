@@ -251,3 +251,21 @@ I want to set up Comm's — a local iMessage + Gmail aggregator. Read README.md 
 - **Gmail**: only metadata is fetched (sender, subject, snippet). Full message bodies are never requested or stored
 - **Contacts**: resolved locally from your macOS AddressBook — no external API calls
 - **No AI, no cloud, no analytics** — the server has no outbound connections except to the Gmail API when you've connected an account
+
+---
+
+## Suite siblings
+
+Comm's is the **messaging + contacts** node of a five-app personal suite. The apps are independent processes that talk over HTTP with Bearer auth; each runs on [Fly.io](https://fly.io) and backs up SQLite to Cloudflare R2 via [Litestream](https://litestream.io).
+
+| App | Role | What flows to/from Comm's |
+|---|---|---|
+| **[gloss](https://github.com/nathan0colestock-code/gloss)** | Personal knowledge graph (paper-journal OCR, pages, collections, people) | Gloss pushes contact profiles into Comm's via `POST /api/gloss/contacts` |
+| **[scribe](https://github.com/nathan0colestock-code/scribe)** | Collaborative document editor | Doesn't talk to Comm's directly; shares contacts indirectly via gloss |
+| **[black](https://github.com/nathan0colestock-code/black)** | Personal file search (Drive, Evernote, iCloud → indexed) | Black can reference contact data from Comm's for enrichment |
+| **[maestro](https://github.com/nathan0colestock-code/maestro)** | Overnight orchestration (capture → worker → test → merge → deploy) | Maestro polls `GET /api/status` to show fleet health; can dispatch feature sets that touch Comm's |
+
+All five apps expose a suite-standard `GET /api/status` that returns `{ app, version, ok, uptime_seconds, metrics }`, protected by Bearer auth using either the app's own `API_KEY` or a shared `SUITE_API_KEY`.
+
+Integration contracts between pairs of apps live in `docs/INTEGRATIONS/` in the primary repo for each contract.
+
