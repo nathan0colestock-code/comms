@@ -137,11 +137,34 @@ For automated daily collection, add a cron job or launchd agent that runs `node 
 The server exposes a REST API for other apps. It runs locally on port 3748 and is also tunneled to a stable public HTTPS URL via ngrok so deployed apps can reach it.
 
 ```
-GET  /api/runs               — list recent runs (last 60 days)
-GET  /api/runs/:date         — full detail for a date (messages + emails)
-POST /api/collect/:date      — trigger collection for a specific date
-GET  /api/gmail/accounts     — list connected Gmail accounts
+GET  /api/runs                          — list recent runs (last 60 days)
+GET  /api/runs/:date                    — full detail for a date (messages + emails)
+POST /api/collect/:date                 — trigger collection for a specific date
+GET  /api/gmail/accounts                — list connected Gmail accounts (no tokens)
+GET  /api/status                        — suite-standard status envelope
+GET  /api/contacts/:name                — full contact profile + timeline
+POST /api/contacts/:name/draft-message  — build an outbound Gmail draft tailored
+                                          to this contact's history (never sends)
+POST /api/gloss/contacts                — gloss → comms contact push
+GET  /api/email-helper/runs             — recent inbox-triage runs
+GET  /api/email-helper/unsubscribes     — pending unsubscribe review queue
+POST /api/email-helper/unsubscribes/:id/{approve,dismiss}
+POST /api/email-helper/run              — manually trigger the triage job
 ```
+
+### Scheduled inbox triage
+
+Comms runs an inbox-triage job at **08:00 and 12:00 local** (hours configurable via `EMAIL_HELPER_HOURS`). For each unread thread:
+
+- **transactional** (receipts, no-reply, 2FA) → leave alone
+- **newsletter / bulk** (List-Unsubscribe header + bulk-sender pattern) → queue the unsubscribe URL for human review; optionally archive if `AUTO_ARCHIVE_BULK=true`
+- **real person** → build a cached per-contact context profile from gloss + comms + message history and draft a Gemini-generated reply into Gmail Drafts. Never sends.
+
+The classifier is pure heuristic — free and deterministic. Unsubscribes never auto-click; they accumulate in `email_unsub_queue` for weekly batch review.
+
+### MCP tools
+
+`mcp.js` exposes comms as an MCP server so Claude (or any MCP client) can query contacts, draft messages, and read nudges directly. See `mcp.js` for the tool list.
 
 All `/api/*` routes require an API key — pass it as a header:
 
