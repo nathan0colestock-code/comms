@@ -27,6 +27,9 @@ const { fetchEmailsForDate } = require('./gmail');
 // Paths
 // ---------------------------------------------------------------------------
 
+// On macOS we store the DB under ~/Library/Application Support/comms/comms.db.
+// On Fly.io (or anywhere the env var is set), honor COMMS_DB_PATH instead —
+// e.g. /data/comms.db on the mounted volume.
 const DATA_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'comms');
 const DB_PATH  = process.env.COMMS_DB_PATH || path.join(DATA_DIR, 'comms.db');
 
@@ -111,8 +114,66 @@ function openDb() {
       added_at   TEXT NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(date);
-    CREATE INDEX IF NOT EXISTS idx_emails_date   ON emails(date);
+    -- Enriched profiles pushed from Gloss (the notebook app).
+    -- One row per canonical person. The "contact" name is the join key that
+    -- matches messages.contact / emails.contact (case-insensitive).
+    CREATE TABLE IF NOT EXISTS gloss_contacts (
+      contact            TEXT PRIMARY KEY COLLATE NOCASE,
+      aliases            TEXT,              -- JSON array of alt names
+      gloss_id           TEXT NOT NULL,
+      gloss_url          TEXT NOT NULL,
+      mention_count      INTEGER DEFAULT 0,
+      last_mentioned_at  TEXT,              -- YYYY-MM-DD
+      priority           INTEGER DEFAULT 0,
+      growth_note        TEXT,
+      recent_context     TEXT,              -- JSON: [{date, role_summary, collection}]
+      linked_collections TEXT,              -- JSON: [string,...]
+      synced_at          TEXT NOT NULL
+    );
+
+    -- Google Calendar events (rolling 14-day window).
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id           TEXT PRIMARY KEY,        -- Google event ID
+      calendar_id  TEXT,
+      account      TEXT,                    -- which Gmail account owns it
+      date         TEXT NOT NULL,           -- YYYY-MM-DD (local date of start)
+      start_time   TEXT,                    -- ISO 8601
+      end_time     TEXT,
+      title        TEXT,
+      description  TEXT,
+      location     TEXT,
+      attendees    TEXT,                    -- JSON: [{name, email, response}]
+      html_link    TEXT,
+      synced_at    TEXT NOT NULL
+    );
+
+    -- AI-generated contact insights (cached; regenerated on demand).
+    CREATE TABLE IF NOT EXISTS contact_insights (
+      contact      TEXT PRIMARY KEY COLLATE NOCASE,
+      insight      TEXT NOT NULL,
+      generated_at TEXT NOT NULL
+    );
+
+    -- AI-generated meeting briefs (cached per event).
+    CREATE TABLE IF NOT EXISTS meeting_briefs (
+      event_id     TEXT PRIMARY KEY,
+      brief        TEXT NOT NULL,
+      generated_at TEXT NOT NULL
+    );
+
+    -- Nudge dismissals keyed by ISO week so they auto-expire each Monday.
+    CREATE TABLE IF NOT EXISTS nudge_dismissals (
+      contact  TEXT NOT NULL,
+      week     TEXT NOT NULL,               -- e.g. "2026-W17"
+      PRIMARY KEY (contact, week)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_messages_date       ON messages(date);
+    CREATE INDEX IF NOT EXISTS idx_emails_date         ON emails(date);
+    CREATE INDEX IF NOT EXISTS idx_messages_contact    ON messages(contact COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_emails_contact      ON emails(contact COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_calendar_events_date ON calendar_events(date);
+    CREATE INDEX IF NOT EXISTS idx_gloss_contacts_prio  ON gloss_contacts(priority DESC);
   `);
 
   // Migrations for emails table
@@ -613,10 +674,434 @@ function deleteGmailAccount(id) {
   finally { db.close(); }
 }
 
+function saveGmailTokens(id, tokens) {
+  const db = openDb();
+  try {
+    db.prepare('UPDATE gmail_accounts SET token_json = ? WHERE id = ?')
+      .run(JSON.stringify(tokens), id);
+  } finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// gloss_contacts — profiles pushed from the notebook app
+// ---------------------------------------------------------------------------
+
+function upsertGlossContact(p) {
+  if (!p || !p.contact || !p.gloss_id) {
+    throw new Error('upsertGlossContact: contact and gloss_id are required');
+  }
+  const db = openDb();
+  try {
+    db.prepare(`
+      INSERT INTO gloss_contacts (
+        contact, aliases, gloss_id, gloss_url,
+        mention_count, last_mentioned_at, priority, growth_note,
+        recent_context, linked_collections, synced_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(contact) DO UPDATE SET
+        aliases            = excluded.aliases,
+        gloss_id           = excluded.gloss_id,
+        gloss_url          = excluded.gloss_url,
+        mention_count      = excluded.mention_count,
+        last_mentioned_at  = excluded.last_mentioned_at,
+        priority           = excluded.priority,
+        growth_note        = excluded.growth_note,
+        recent_context     = excluded.recent_context,
+        linked_collections = excluded.linked_collections,
+        synced_at          = excluded.synced_at
+    `).run(
+      p.contact,
+      JSON.stringify(p.aliases || []),
+      p.gloss_id,
+      p.gloss_url,
+      p.mention_count ?? 0,
+      p.last_mentioned_at || null,
+      p.priority ?? 0,
+      p.growth_note || null,
+      JSON.stringify(p.recent_context || []),
+      JSON.stringify(p.linked_collections || []),
+      new Date().toISOString(),
+    );
+  } finally { db.close(); }
+}
+
+function getGlossContact(contact) {
+  const db = openDb();
+  try {
+    const row = db.prepare('SELECT * FROM gloss_contacts WHERE contact = ? COLLATE NOCASE').get(contact);
+    if (!row) {
+      // Also try alias match
+      const all = db.prepare('SELECT * FROM gloss_contacts WHERE aliases IS NOT NULL').all();
+      for (const r of all) {
+        try {
+          const aliases = JSON.parse(r.aliases || '[]');
+          if (aliases.some(a => a.toLowerCase() === contact.toLowerCase())) return hydrateGloss(r);
+        } catch {}
+      }
+      return null;
+    }
+    return hydrateGloss(row);
+  } finally { db.close(); }
+}
+
+function hydrateGloss(row) {
+  if (!row) return null;
+  let recent_context = [];
+  let aliases = [];
+  let linked_collections = [];
+  try { recent_context = JSON.parse(row.recent_context || '[]'); } catch {}
+  try { aliases = JSON.parse(row.aliases || '[]'); } catch {}
+  try { linked_collections = JSON.parse(row.linked_collections || '[]'); } catch {}
+  return { ...row, recent_context, aliases, linked_collections };
+}
+
+// Aggregated contact list: everyone we've ever messaged/emailed, plus any
+// gloss profile we have. Rows returned sorted by priority DESC, then last
+// contact date DESC. Each row: { contact, message_count, email_count,
+// last_contact_date, gloss: {...}|null }.
+function listContacts({ q = '', limit = 500 } = {}) {
+  const db = openDb();
+  try {
+    const pattern = q ? `%${q}%` : null;
+    // Gather per-contact stats from messages + emails, unioned.
+    const rows = db.prepare(`
+      SELECT contact,
+             SUM(msg) AS message_count,
+             SUM(eml) AS email_count,
+             MAX(last_date) AS last_contact_date
+      FROM (
+        SELECT contact, COUNT(*) AS msg, 0 AS eml, MAX(date) AS last_date
+        FROM messages
+        ${pattern ? 'WHERE contact LIKE ? COLLATE NOCASE' : ''}
+        GROUP BY contact COLLATE NOCASE
+        UNION ALL
+        SELECT contact, 0, COUNT(*), MAX(date)
+        FROM emails
+        ${pattern ? 'WHERE contact LIKE ? COLLATE NOCASE' : ''}
+        GROUP BY contact COLLATE NOCASE
+      )
+      GROUP BY contact COLLATE NOCASE
+    `).all(...(pattern ? [pattern, pattern] : []));
+
+    // Also union in any gloss_contacts with zero comms (so priority people with
+    // no messages/emails still appear).
+    const glossRows = db.prepare(`
+      SELECT contact FROM gloss_contacts
+      ${pattern ? 'WHERE contact LIKE ? COLLATE NOCASE' : ''}
+    `).all(...(pattern ? [pattern] : []));
+
+    const map = new Map();
+    for (const r of rows) {
+      map.set(r.contact.toLowerCase(), {
+        contact: r.contact,
+        message_count: r.message_count || 0,
+        email_count: r.email_count || 0,
+        last_contact_date: r.last_contact_date || null,
+      });
+    }
+    for (const g of glossRows) {
+      if (!map.has(g.contact.toLowerCase())) {
+        map.set(g.contact.toLowerCase(), {
+          contact: g.contact, message_count: 0, email_count: 0, last_contact_date: null,
+        });
+      }
+    }
+
+    // Attach gloss profiles (by contact name OR alias).
+    const allGloss = db.prepare('SELECT * FROM gloss_contacts').all().map(hydrateGloss);
+    const byName = new Map(allGloss.map(g => [g.contact.toLowerCase(), g]));
+    const byAlias = new Map();
+    for (const g of allGloss) {
+      for (const a of (g.aliases || [])) byAlias.set(a.toLowerCase(), g);
+    }
+
+    const result = [];
+    for (const row of map.values()) {
+      const key = row.contact.toLowerCase();
+      const gloss = byName.get(key) || byAlias.get(key) || null;
+      result.push({ ...row, gloss });
+    }
+
+    result.sort((a, b) => {
+      const pa = a.gloss?.priority || 0;
+      const pb = b.gloss?.priority || 0;
+      if (pa !== pb) return pb - pa;
+      const da = a.last_contact_date || '';
+      const dbd = b.last_contact_date || '';
+      return dbd.localeCompare(da);
+    });
+    return result.slice(0, limit);
+  } finally { db.close(); }
+}
+
+// Full contact detail: stats, gloss profile, and last N messages/emails.
+function getContactDetail(name, { recentLimit = 50 } = {}) {
+  const db = openDb();
+  try {
+    const stats = db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM messages WHERE contact = ? COLLATE NOCASE) AS message_count,
+        (SELECT COUNT(*) FROM emails   WHERE contact = ? COLLATE NOCASE) AS email_count,
+        (SELECT MIN(date) FROM (
+           SELECT MIN(date) date FROM messages WHERE contact = ? COLLATE NOCASE
+           UNION ALL
+           SELECT MIN(date) date FROM emails   WHERE contact = ? COLLATE NOCASE
+         )) AS first_contact_date,
+        (SELECT MAX(date) FROM (
+           SELECT MAX(date) date FROM messages WHERE contact = ? COLLATE NOCASE
+           UNION ALL
+           SELECT MAX(date) date FROM emails   WHERE contact = ? COLLATE NOCASE
+         )) AS last_contact_date
+    `).get(name, name, name, name, name, name);
+
+    const messages = db.prepare(`
+      SELECT id, date, direction, sender, text, sent_at, handle_id
+      FROM messages WHERE contact = ? COLLATE NOCASE
+      ORDER BY sent_at DESC LIMIT ?
+    `).all(name, recentLimit);
+
+    const emails = db.prepare(`
+      SELECT id, date, direction, contact, email_address, subject, snippet, account
+      FROM emails WHERE contact = ? COLLATE NOCASE
+      ORDER BY rowid DESC LIMIT ?
+    `).all(name, recentLimit);
+
+    const handles = new Set();
+    for (const m of messages) if (m.handle_id) handles.add(m.handle_id);
+    const emailAddrs = new Set();
+    for (const e of emails) if (e.email_address) emailAddrs.add(e.email_address);
+
+    const gloss = getGlossContact(name);
+    const insight = db.prepare('SELECT insight, generated_at FROM contact_insights WHERE contact = ? COLLATE NOCASE').get(name);
+
+    return {
+      contact: name,
+      stats,
+      handles: [...handles],
+      emails_addrs: [...emailAddrs],
+      gloss,
+      insight: insight || null,
+      messages,
+      emails,
+    };
+  } finally { db.close(); }
+}
+
+// Counts + email subjects for the last N days, used as input to the AI.
+// Does NOT include message text.
+function getRecentCommsForAI(name, days = 30) {
+  const db = openDb();
+  try {
+    const cutoff = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
+    const stats = db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM messages WHERE contact = ? COLLATE NOCASE AND date >= ?) AS message_count_30d,
+        (SELECT COUNT(*) FROM emails   WHERE contact = ? COLLATE NOCASE AND date >= ?) AS email_count_30d,
+        (SELECT MAX(date) FROM messages WHERE contact = ? COLLATE NOCASE) AS last_message_date,
+        (SELECT MAX(date) FROM emails   WHERE contact = ? COLLATE NOCASE) AS last_email_date
+    `).get(name, cutoff, name, cutoff, name, name);
+    const subjects = db.prepare(`
+      SELECT subject FROM emails
+      WHERE contact = ? COLLATE NOCASE AND subject IS NOT NULL AND date >= ?
+      ORDER BY rowid DESC LIMIT 10
+    `).all(name, cutoff).map(r => r.subject);
+    return { ...stats, recent_email_subjects: subjects };
+  } finally { db.close(); }
+}
+
+function saveContactInsight(contact, insight) {
+  const db = openDb();
+  try {
+    db.prepare(`
+      INSERT INTO contact_insights (contact, insight, generated_at) VALUES (?, ?, ?)
+      ON CONFLICT(contact) DO UPDATE SET insight = excluded.insight, generated_at = excluded.generated_at
+    `).run(contact, insight, new Date().toISOString());
+  } finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// calendar_events
+// ---------------------------------------------------------------------------
+
+function upsertCalendarEvents(account, events) {
+  if (!events?.length) return 0;
+  const db = openDb();
+  try {
+    const now = new Date().toISOString();
+    const stmt = db.prepare(`
+      INSERT INTO calendar_events (
+        id, calendar_id, account, date, start_time, end_time,
+        title, description, location, attendees, html_link, synced_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        calendar_id = excluded.calendar_id,
+        account     = excluded.account,
+        date        = excluded.date,
+        start_time  = excluded.start_time,
+        end_time    = excluded.end_time,
+        title       = excluded.title,
+        description = excluded.description,
+        location    = excluded.location,
+        attendees   = excluded.attendees,
+        html_link   = excluded.html_link,
+        synced_at   = excluded.synced_at
+    `);
+    db.transaction(() => {
+      for (const e of events) {
+        stmt.run(
+          e.id, e.calendar_id || 'primary', account, e.date,
+          e.start_time || null, e.end_time || null,
+          e.title || '(no title)', e.description || null, e.location || null,
+          JSON.stringify(e.attendees || []), e.html_link || null, now,
+        );
+      }
+    })();
+    return events.length;
+  } finally { db.close(); }
+}
+
+// Prune events older than N days past so the table doesn't grow forever.
+function pruneOldCalendarEvents(keepPastDays = 2) {
+  const db = openDb();
+  try {
+    const cutoff = new Date(Date.now() - keepPastDays * 86400_000).toISOString().slice(0, 10);
+    const r = db.prepare('DELETE FROM calendar_events WHERE date < ?').run(cutoff);
+    return r.changes;
+  } finally { db.close(); }
+}
+
+function listCalendarEvents({ days = 14 } = {}) {
+  const db = openDb();
+  try {
+    const today = localDateStr();
+    const end = new Date(Date.now() + days * 86400_000).toISOString().slice(0, 10);
+    const rows = db.prepare(`
+      SELECT * FROM calendar_events
+      WHERE date >= ? AND date <= ?
+      ORDER BY date, start_time
+    `).all(today, end);
+    return rows.map(hydrateEvent);
+  } finally { db.close(); }
+}
+
+function getCalendarEvent(id) {
+  const db = openDb();
+  try {
+    const row = db.prepare('SELECT * FROM calendar_events WHERE id = ?').get(id);
+    return hydrateEvent(row);
+  } finally { db.close(); }
+}
+
+function hydrateEvent(row) {
+  if (!row) return null;
+  let attendees = [];
+  try { attendees = JSON.parse(row.attendees || '[]'); } catch {}
+  return { ...row, attendees };
+}
+
+function getMeetingBrief(eventId) {
+  const db = openDb();
+  try {
+    return db.prepare('SELECT brief, generated_at FROM meeting_briefs WHERE event_id = ?').get(eventId) || null;
+  } finally { db.close(); }
+}
+
+function saveMeetingBrief(eventId, brief) {
+  const db = openDb();
+  try {
+    db.prepare(`
+      INSERT INTO meeting_briefs (event_id, brief, generated_at) VALUES (?, ?, ?)
+      ON CONFLICT(event_id) DO UPDATE SET brief = excluded.brief, generated_at = excluded.generated_at
+    `).run(eventId, brief, new Date().toISOString());
+  } finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// Nudges — priority people with no recent contact
+// ---------------------------------------------------------------------------
+
+// Return ISO week label like "2026-W17" for a given Date.
+function isoWeekOf(date = new Date()) {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+}
+
+function getNudges() {
+  const db = openDb();
+  try {
+    const week = isoWeekOf();
+    const rows = db.prepare(`
+      SELECT * FROM gloss_contacts WHERE priority > 0 ORDER BY priority DESC
+    `).all().map(hydrateGloss);
+
+    const dismissed = new Set(
+      db.prepare('SELECT contact FROM nudge_dismissals WHERE week = ?').all(week).map(r => r.contact.toLowerCase())
+    );
+
+    const today = new Date();
+    const out = [];
+    for (const g of rows) {
+      if (dismissed.has(g.contact.toLowerCase())) continue;
+
+      // Most recent comms: check name + all aliases
+      const names = [g.contact, ...(g.aliases || [])];
+      const placeholders = names.map(() => '? COLLATE NOCASE').join(',');
+      const lastDate = db.prepare(`
+        SELECT MAX(date) d FROM (
+          SELECT MAX(date) date FROM messages WHERE contact IN (${placeholders})
+          UNION ALL
+          SELECT MAX(date) date FROM emails   WHERE contact IN (${placeholders})
+        )
+      `).get(...names, ...names)?.d || null;
+
+      let daysSince;
+      if (lastDate) {
+        daysSince = Math.floor((today - new Date(lastDate + 'T12:00:00')) / 86400000);
+      } else {
+        daysSince = 999; // never contacted via comms → always nudge
+      }
+
+      const threshold = g.priority >= 3 ? 7 : 14;
+      if (daysSince < threshold) continue;
+
+      out.push({
+        contact: g.contact,
+        priority: g.priority,
+        days_since_contact: daysSince,
+        last_contact_date: lastDate,
+        growth_note: g.growth_note,
+        gloss_url: g.gloss_url,
+      });
+    }
+    return out;
+  } finally { db.close(); }
+}
+
+function dismissNudge(contact) {
+  const db = openDb();
+  try {
+    db.prepare(`
+      INSERT OR IGNORE INTO nudge_dismissals (contact, week) VALUES (?, ?)
+    `).run(contact, isoWeekOf());
+  } finally { db.close(); }
+}
+
 module.exports = {
   collect, getRuns, getRunDetail, getMissingDates,
-  getGmailAccounts, saveGmailAccount, deleteGmailAccount,
+  getGmailAccounts, saveGmailAccount, deleteGmailAccount, saveGmailTokens,
   testMessagesAccess,
+  // Gloss profiles
+  upsertGlossContact, getGlossContact, listContacts, getContactDetail, getRecentCommsForAI,
+  saveContactInsight,
+  // Calendar
+  upsertCalendarEvents, pruneOldCalendarEvents, listCalendarEvents, getCalendarEvent,
+  getMeetingBrief, saveMeetingBrief,
+  // Nudges
+  getNudges, dismissNudge, isoWeekOf,
   DB_PATH,
   // Exported for testing
   extractTextFromAttributedBody, normalizePhone, isRealPersonEmail,
