@@ -152,6 +152,21 @@ nav.nav { padding: 10px 10px 6px; display: flex; flex-direction: column; gap: 2p
 .sync-banner .right { display: flex; gap: 10px; align-items: center; }
 .sync-banner .stale { color: var(--yellow); }
 
+/* ─── Settings status block ──────────────────────────────────────────── */
+.settings-section-label {
+  font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--muted); font-weight: 700; margin-bottom: 6px;
+}
+.st-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 4px 0; border-bottom: 1px solid var(--border);
+}
+.st-row:last-child { border-bottom: none; }
+.st-row .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.st-row .v { font-size: 12px; color: var(--text); }
+.st-row .v.stale { color: var(--yellow); }
+.st-row .v.ok    { color: var(--green); }
+
 /* ─── Main content area ──────────────────────────────────────────────── */
 main.view {
   flex: 1; min-width: 0; display: flex; min-height: 0;
@@ -523,11 +538,18 @@ main.view {
 <div class="modal-backdrop" id="settings-modal" onclick="if(event.target===this)closeModal('settings-modal')">
   <div class="modal">
     <h2>Settings</h2>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.06em;font-weight:700">Connected accounts</h2>
-    <div id="accounts-list" style="margin-bottom:14px"></div>
+
+    <div class="settings-section-label">Status</div>
+    <div id="settings-status" style="margin-bottom:14px;font-size:12px;color:var(--text-dim);line-height:1.7"></div>
+
+    <div class="settings-section-label">Connected accounts</div>
+    <div id="accounts-list" style="margin-bottom:10px"></div>
     <button class="btn ghost small" onclick="addGmail()">+ Connect Gmail / Calendar</button>
+
     <div style="border-top:1px solid var(--border);margin:18px 0 12px"></div>
+
     <button class="btn ghost small" onclick="pollCalendarNow()">Sync calendar now</button>
+
     <div class="modal-actions">
       <form method="POST" action="/api/logout" style="display:inline">
         <button class="btn ghost small" type="submit">Sign out</button>
@@ -1331,14 +1353,43 @@ async function loadAccounts() {
     const el = document.getElementById('accounts-list');
     if (!accounts.length) {
       el.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:4px 0">No accounts connected.</div>';
-      return;
+    } else {
+      el.innerHTML = accounts.map(a => `
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px">
+          <div style="flex:1">${esc(a.email)}</div>
+          <button class="btn ghost small" onclick="removeAccount('${esc(a.id)}','${esc(a.email)}')">×</button>
+        </div>`).join('');
     }
-    el.innerHTML = accounts.map(a => `
-      <div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px">
-        <div style="flex:1">${esc(a.email)}</div>
-        <button class="btn ghost small" onclick="removeAccount('${esc(a.id)}','${esc(a.email)}')">×</button>
-      </div>`).join('');
   } catch {}
+  loadSettingsStatus();
+}
+
+async function loadSettingsStatus() {
+  const el = document.getElementById('settings-status');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--muted)">Loading…</div>';
+  try {
+    const s = await api('/api/status');
+    const last = s.last_run;
+    const lastLabel = last
+      ? `${last.date} · ${last.messages_count || 0} msg, ${last.emails_count || 0} email`
+      : '—';
+    const calLabel = s.calendar?.last_synced
+      ? `${new Date(s.calendar.last_synced).toLocaleString()} · ${s.calendar.upcoming_count || 0} upcoming`
+      : '—';
+    const glossLabel = s.gloss?.last_pushed
+      ? `${new Date(s.gloss.last_pushed).toLocaleString()} · ${s.gloss.priority || 0} priority / ${s.gloss.total || 0} total`
+      : (s.gloss?.total ? `${s.gloss.total} cached` : 'never');
+    const totals = s.totals || {};
+    el.innerHTML = `
+      <div class="st-row"><span class="k">Last collection</span><span class="v">${esc(lastLabel)}</span></div>
+      <div class="st-row"><span class="k">Calendar sync</span><span class="v">${esc(calLabel)}</span></div>
+      <div class="st-row"><span class="k">Gloss push</span><span class="v">${esc(glossLabel)}</span></div>
+      <div class="st-row"><span class="k">Totals</span><span class="v">${totals.total_runs || 0} runs · ${totals.total_messages || 0} msg · ${totals.total_emails || 0} email</span></div>
+    `;
+  } catch (e) {
+    el.innerHTML = `<div style="color:var(--red)">Status error: ${esc(e.message)}</div>`;
+  }
 }
 
 function addGmail() { location.href = '/api/gmail/auth'; }

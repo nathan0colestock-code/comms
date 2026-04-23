@@ -21,9 +21,10 @@ data
 test
 install.sh
 
-# Docs
+# Docs (only referenced from README, not at runtime)
 README.md
 *.md
+screenshot.png
 
 # Editor / OS junk
 .DS_Store
