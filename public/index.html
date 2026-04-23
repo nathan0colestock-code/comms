@@ -23,6 +23,17 @@
   --suite-font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
 }
+/* Single opinionated light theme. Maps the same CSS variables — zero JS, no
+   per-component overrides. Picked for contrast (WCAG AA body text) rather
+   than aesthetic polish. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f7f7f9; --surface: #ffffff; --surface-2: #eceff5; --border: #d8dce6;
+    --text: #1a1c24; --text-dim: #4b5160; --muted: #7a8195; --accent: #3a5ec7;
+    --green: #2d8a5a; --red: #c04545; --yellow: #a77a1f; --gold: #a37926;
+    --suite-focus: #3a5ec7;
+  }
+}
 html, body { height: 100dvh; }
 body {
   background: var(--bg); color: var(--text);
@@ -499,10 +510,17 @@ a.tl-title:hover { color: var(--accent); text-decoration: underline; }
   .layout { flex-direction: column-reverse; }
   aside.sidebar {
     width: 100%; flex-direction: row; border-right: none; border-top: 1px solid var(--border);
-    height: auto; flex-shrink: 0; padding-bottom: env(safe-area-inset-bottom);
+    height: auto; flex-shrink: 0;
+    /* Honor the safe-area inset on iPhones without a home button so the bottom
+       tab bar lifts above the home indicator. */
+    padding-bottom: max(4px, env(safe-area-inset-bottom));
   }
   nav.nav { flex-direction: row; padding: 6px; flex: 1; gap: 2px; }
-  .nav-item { flex: 1; justify-content: center; padding: 10px 6px; font-size: 11px; }
+  /* Bottom tab bar tap targets — guarantee 44px minimum per iOS HIG. */
+  .nav-item {
+    flex: 1; justify-content: center; padding: 10px 6px; font-size: 11px;
+    min-height: var(--suite-touch-min);
+  }
   .nav-item .count { display: none; }
   .nudges-section { display: none; } /* accessible via contacts tab on mobile */
 
@@ -524,9 +542,34 @@ a.tl-title:hover { color: var(--accent); text-decoration: underline; }
 
   .calendar-list, .event-detail { padding: 14px 16px 60px; }
 
-  /* Suite touch-target minimum on mobile (excludes compact .btn.small) */
-  .btn:not(.small) { min-height: var(--suite-touch-min); }
+  /* Suite touch-target minimum on mobile. Previously only .btn:not(.small)
+     got the 44px bump — but .btn.small is used for most toolbar actions
+     ("Catch up", "Today", "Sync now", "+ Add"). Bump them too: keep them
+     visually compact (still 11px font) while guaranteeing 44px tap height. */
+  .btn { min-height: var(--suite-touch-min); padding-top: 8px; padding-bottom: 8px; }
+  .btn.small { min-height: var(--suite-touch-min); padding-top: 6px; padding-bottom: 6px; }
+  .icon-btn { width: var(--suite-touch-min); height: var(--suite-touch-min); }
   .search-wrap input { min-height: var(--suite-touch-min); }
+
+  /* List rows: ensure a full finger can hit them. */
+  .contact-row, .daily-row, .attendee-row, .event-row { min-height: var(--suite-touch-min); }
+  .sr-row { min-height: var(--suite-touch-min); padding: 10px 14px; }
+  /* Nudge dismiss button — a 2px-padded × is unclickable. */
+  .nudge .dismiss { min-width: 32px; min-height: 32px; display: grid; place-items: center; }
+}
+
+/* ─── Touch-device hover replacements ────────────────────────────────── */
+/* On coarse-pointer devices :hover never fires, which leaves several
+   affordances (card borders, dismiss buttons, row highlights) invisible.
+   Make the hover styling the default state on touch devices so the
+   UI isn't silently hiding interactivity. */
+@media (hover: none) {
+  .event-card { border-color: var(--border); }
+  .event-card:active { border-color: var(--accent); }
+  .nudge:active { border-color: var(--accent); }
+  .contact-row:active, .daily-row:active { background: var(--surface); }
+  .sr-row:active { background: var(--surface-2); }
+  .btn.ghost:active { border-color: var(--accent); color: var(--accent); }
 }
 
 .back-link-btn {
@@ -1886,7 +1929,8 @@ async function syncAddressBook() {
 // ═══════════════════════════════════════════════════════════════════════════
 async function loadCalendar() {
   const body = document.getElementById('calendar-body');
-  body.innerHTML = '<div style="padding:40px 0;color:var(--muted);text-align:center;font-size:13px">Loading…</div>';
+  // Use skeleton rows so the viewport doesn't flash blank during fetch.
+  if (!state.events.length) body.innerHTML = skeletonRows(8);
   try {
     const { events } = await api('/api/calendar/events?days=14');
     state.events = events;
@@ -2310,6 +2354,8 @@ async function pollCalendarNow() {
 // Daily
 // ═══════════════════════════════════════════════════════════════════════════
 async function loadDaily() {
+  const list = document.getElementById('daily-runs');
+  if (list && !state.runs.length) list.innerHTML = skeletonRows(6);
   try {
     const runs = await api('/api/runs');
     state.runs = runs;
