@@ -248,6 +248,94 @@ function resolveHandlesToNames(handles) {
 }
 
 // ---------------------------------------------------------------------------
+// attributedBody decoder — NSTypedStream binary → plain text
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract plain text from the NSTypedStream-encoded NSMutableAttributedString
+ * stored in chat.db's `attributedBody` column.
+ *
+ * The blob starts with \x04\x0bstreamtyped, then class info, then the string
+ * value.  Text is length-prefixed using NSTypedStream's compact integer format:
+ *   length < 128    → single byte (no marker)
+ *   128 ≤ len ≤ 255 → 0x81 [1 byte]
+ *   256 ≤ len       → 0x82 [2 bytes big-endian]
+ *
+ * Observed in the wild: the string is introduced by 0x2b ('+', the NSTypedStream
+ * selector/string type), then the compact length, then one flag byte (0x00 or
+ * 0x01, probably encoding hint), then the raw UTF-8 bytes.
+ *
+ * Example: 2b 81 26 01 <38 UTF-8 bytes>
+ *          2b 81 af 00 <175 UTF-8 bytes>
+ */
+function extractTextFromAttributedBody(blob) {
+  if (!blob || blob.length < 14) return null;
+  // Verify NSTypedStream magic: 04 0b "streamtyped"
+  if (blob[0] !== 0x04 || blob[1] !== 0x0b) return null;
+  if (blob.slice(2, 13).toString('ascii') !== 'streamtyped')  return null;
+
+  // Only scan the first 500 bytes — the string value is always near the start
+  const limit = Math.min(blob.length, 500);
+
+  // Helper: test whether a candidate string looks like message text
+  function plausible(s) {
+    if (!s || s.length < 1) return false;
+    // Reject known binary noise / class name prefixes
+    if (/^(NS|CK|UI|__C|stream|attribute)/.test(s)) return false;
+    if (s.charCodeAt(0) === 0) return false; // starts with null byte
+    // At least 80% of chars must be printable (including emoji which are multi-byte)
+    let ok = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c >= 0x20 || c === 0x09 || c === 0x0a || c === 0x0d) ok++;
+    }
+    return ok / s.length >= 0.80;
+  }
+
+  // NSTypedStream compact integer encoding used for string lengths:
+  //   length < 128          → stored as single byte (no marker)
+  //   128 ≤ length ≤ 255   → 0x81 [1 byte]
+  //   256 ≤ length          → 0x82 [2 bytes big-endian]
+  //
+  // String intro pattern (observed in iMessage attributedBody):
+  //   Direct:   0x2b [len<128]        [UTF-8 text of len bytes]     ← NO flag byte
+  //   Extended: 0x2b 0x81 [len] [flag] [UTF-8 text of len bytes]    ← flag = 0x00 or 0x01
+  //   Long:     0x2b 0x82 [hi] [lo] [flag] [UTF-8 text]
+
+  for (let i = 13; i < limit - 4; i++) {
+    if (blob[i] !== 0x2b) continue;
+
+    const b1 = blob[i + 1];
+    let len, textStart;
+
+    if (b1 === 0x81) {
+      // Extended 1-byte length: 0x2b 0x81 [len] [flag] [text]
+      len = blob[i + 2];
+      textStart = i + 4;   // skip: 0x2b, 0x81, len, flag
+    } else if (b1 === 0x82) {
+      // Extended 2-byte length: 0x2b 0x82 [hi] [lo] [flag] [text]
+      len = (blob[i + 2] << 8) | blob[i + 3];
+      textStart = i + 5;   // skip: 0x2b, 0x82, hi, lo, flag
+    } else if (b1 >= 0x04 && b1 < 0x80) {
+      // Direct 1-byte length: 0x2b [len] [text]  — no flag byte
+      len = b1;
+      textStart = i + 2;   // skip: 0x2b, len
+    } else {
+      continue;
+    }
+
+    if (len < 1 || textStart + len > blob.length) continue;
+
+    try {
+      const text = blob.slice(textStart, textStart + len).toString('utf8');
+      if (plausible(text)) return text;
+    } catch { /* invalid UTF-8, skip */ }
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // iMessage collector — reads chat.db directly (Full Disk Access required)
 // ---------------------------------------------------------------------------
 
@@ -279,6 +367,7 @@ function fetchMessages(date) {
       SELECT
         m.is_from_me,
         m.text,
+        SUBSTR(m.attributedBody, 1, 1000) AS attributed_body,
         CAST(m.date / 1000000000 AS INTEGER) AS apple_seconds,
         h.id AS sender_handle,
         NULLIF(c.display_name, '')  AS group_name,
@@ -292,6 +381,8 @@ function fetchMessages(date) {
       LEFT JOIN chat c                ON c.ROWID = cmj.chat_id
       WHERE m.date >= ? AND m.date < ?
         AND m.item_type = 0
+        AND m.associated_message_type = 0
+        AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
       ORDER BY m.date
     `).all(startApple, endApple);
 
@@ -308,6 +399,15 @@ function fetchMessages(date) {
     return rows.map(row => {
       const unixSec = Number(row.apple_seconds) + APPLE_EPOCH_OFFSET;
       const sentAt  = new Date(unixSec * 1000).toISOString();
+
+      // Resolve text: prefer the plain text column; fall back to attributedBody parse
+      let text = (row.text && row.text.trim()) ? row.text.trim() : null;
+      if (!text && row.attributed_body) {
+        text = extractTextFromAttributedBody(row.attributed_body) || null;
+        if (text) text = text.trim();
+      }
+      // Skip messages with no recoverable text (pure attachments, stickers, etc.)
+      if (!text) return null;
 
       // contact = who this conversation is with (group name or other person)
       let contact;
@@ -327,10 +427,10 @@ function fetchMessages(date) {
         sender,
         handle_id: row.sender_handle || null,
         direction: row.is_from_me ? 'sent' : 'received',
-        text:      row.text || null,
+        text,
         sent_at:   sentAt,
       };
-    });
+    }).filter(Boolean);
   } finally {
     db.close();
   }
