@@ -542,9 +542,14 @@ async function triggerCollect(date) {
   await selectDate(date);
 }
 
+function localDateStr(d = new Date()) {
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+}
+
 async function collectToday() {
-  const today = new Date().toISOString().slice(0, 10);
-  await triggerCollect(today);
+  await triggerCollect(localDateStr());
 }
 
 async function catchUp() {

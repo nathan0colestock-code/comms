@@ -545,10 +545,16 @@ function getRuns(limit = 60) {
 
 // Returns every ISO date from the day after the last successful run up to today.
 // Returns [] if nothing has been collected yet (caller can decide to collect from today).
+function localDateStr(d = new Date()) {
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+}
+
 function getMissingDates(from) {
   const db = openDb();
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateStr(); // local date, not UTC
     let startDate;
     if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) {
       startDate = from;
@@ -622,7 +628,7 @@ if (require.main === module) {
     const arg = process.argv[2];
     if (arg && /^\d{4}-\d{2}-\d{2}$/.test(arg)) return arg;
     const d = new Date(); d.setDate(d.getDate() - 1);
-    return d.toISOString().slice(0, 10);
+    return localDateStr(d); // local date, not UTC
   })();
 
   function log(msg) { console.log(`[${new Date().toISOString().slice(11, 19)}] ${msg}`); }
