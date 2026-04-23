@@ -626,6 +626,87 @@ a.tl-title:hover { color: var(--accent); text-decoration: underline; }
   font-size: 11px; color: var(--muted);
 }
 .review-btn-bar .due-count.has { color: var(--yellow); }
+
+/* ─── Remember view (flashcard recall) ───────────────────────────────── */
+#view-remember {
+  flex-direction: column; align-items: center;
+  padding: 40px 24px 32px; overflow-y: auto;
+}
+.remember-topbar {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; max-width: 560px; margin-bottom: 28px;
+}
+.remember-topbar .session-label {
+  font-size: 12px; color: var(--muted); white-space: nowrap;
+}
+.remember-prog-track {
+  flex: 1; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden;
+}
+.remember-prog-fill {
+  height: 100%; background: var(--accent); border-radius: 2px;
+  transition: width 0.35s ease; width: 0%;
+}
+.remember-card {
+  width: 100%; max-width: 560px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  overflow: hidden;
+}
+.remember-front {
+  padding: 48px 32px 40px;
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+}
+.remember-front.hide { display: none; }
+.remember-avatar-xl {
+  width: 80px; height: 80px; border-radius: 50%;
+  background: linear-gradient(135deg, #e3b94b 0%, #c8952a 100%);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 28px; font-weight: 700; color: #1a1500; margin-bottom: 20px; flex-shrink: 0;
+}
+.remember-name-xl {
+  font-size: 26px; font-weight: 700; color: var(--text); margin-bottom: 6px; line-height: 1.2;
+}
+.remember-front-rel {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--muted); margin-bottom: 32px; min-height: 14px;
+}
+.remember-cue {
+  font-size: 14px; color: var(--muted); font-style: italic; margin-bottom: 28px;
+}
+.remember-hint-key {
+  margin-top: 10px; font-size: 11px; color: var(--muted);
+}
+.remember-back {
+  display: none; padding: 28px 32px 32px;
+}
+.remember-back.show { display: block; }
+.remember-back-name {
+  font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 3px;
+}
+.remember-back-meta {
+  font-size: 11px; color: var(--muted); margin-bottom: 20px;
+}
+.remember-fact { margin-bottom: 16px; }
+.remember-fact-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--muted); font-weight: 700; margin-bottom: 4px;
+}
+.remember-fact-body {
+  font-size: 13px; color: var(--text); line-height: 1.55; white-space: pre-wrap;
+}
+.remember-no-facts {
+  font-size: 13px; color: var(--muted); font-style: italic; padding: 8px 0 20px;
+}
+.remember-back-actions {
+  display: flex; justify-content: flex-end; gap: 8px;
+  margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border);
+}
+.remember-empty-view {
+  width: 100%; max-width: 560px; display: flex; flex-direction: column;
+  align-items: center; text-align: center; padding: 80px 24px; gap: 12px;
+}
+.remember-empty-view .big-ico { font-size: 38px; margin-bottom: 4px; }
+.remember-empty-view h3 { font-size: 16px; font-weight: 700; color: var(--text); }
+.remember-empty-view p { font-size: 13px; color: var(--muted); max-width: 300px; line-height: 1.5; }
 </style>
 <script>window.__SUITE_CURRENT__ = 'comms';</script>
 <script src="https://maestro-nc.fly.dev/suite-switcher.js" defer></script>
@@ -650,6 +731,7 @@ a.tl-title:hover { color: var(--accent); text-decoration: underline; }
       <button class="nav-item" data-view="calendar"><span class="ico">▤</span>Calendar<span class="count" id="count-calendar"></span></button>
       <button class="nav-item" data-view="dates"><span class="ico">♡</span>Dates<span class="count" id="count-dates"></span></button>
       <button class="nav-item" data-view="daily"><span class="ico">☰</span>Daily</button>
+      <button class="nav-item" data-view="remember"><span class="ico">◈</span>Remember<span class="count" id="count-remember"></span></button>
     </nav>
     <section class="nudges-section">
       <div class="section-label">Nudges</div>
@@ -749,6 +831,44 @@ a.tl-title:hover { color: var(--accent); text-decoration: underline; }
       </div>
       <div class="daily-detail" id="daily-detail">
         <div class="empty-state" style="color:var(--muted);text-align:center;padding-top:80px;font-size:13px">Select a day.</div>
+      </div>
+    </section>
+
+    <!-- Remember view — flashcard recall for contact facts -->
+    <section id="view-remember" class="view-section">
+      <div id="remember-loading" style="color:var(--muted);font-size:13px;padding:60px 0;text-align:center">Loading…</div>
+
+      <div id="remember-empty-view" class="remember-empty-view" style="display:none">
+        <div class="big-ico">◈</div>
+        <h3>All caught up</h3>
+        <p>No one in the queue right now — come back in a few days.</p>
+        <button class="btn ghost small" onclick="loadRemember()">Refresh</button>
+      </div>
+
+      <div id="remember-topbar" class="remember-topbar" style="display:none">
+        <span class="session-label" id="remember-session-label"></span>
+        <div class="remember-prog-track"><div class="remember-prog-fill" id="remember-prog-fill"></div></div>
+        <button class="btn ghost small" onclick="endRemember()">Done</button>
+      </div>
+
+      <div id="remember-card" class="remember-card" style="display:none">
+        <div id="remember-front" class="remember-front">
+          <div class="remember-avatar-xl" id="remember-avatar"></div>
+          <div class="remember-name-xl" id="remember-front-name"></div>
+          <div class="remember-front-rel" id="remember-front-rel"></div>
+          <div class="remember-cue">What do you know about this person?</div>
+          <button class="btn" onclick="revealRememberCard()">Reveal facts</button>
+          <div class="remember-hint-key">Space · or click to reveal</div>
+        </div>
+        <div id="remember-back" class="remember-back">
+          <div class="remember-back-name" id="remember-back-name"></div>
+          <div class="remember-back-meta" id="remember-back-meta"></div>
+          <div id="remember-facts"></div>
+          <div class="remember-back-actions">
+            <button class="btn ghost small" onclick="rememberSkip()" title="Skip — come back to this one (←)">← Needs work</button>
+            <button class="btn small" onclick="rememberDone()" title="Mark reviewed (→)">Got it →</button>
+          </div>
+        </div>
       </div>
     </section>
   </main>
@@ -1147,6 +1267,7 @@ function setView(name) {
   else if (name === 'dates') { loadDates(); }
   else if (name === 'address-book') { loadAddressBook(); }
   else if (name === 'daily') { loadDaily(); }
+  else if (name === 'remember') { loadRemember(); }
   location.hash = '#/' + name;
 }
 document.querySelectorAll('.nav-item').forEach(el => {
@@ -1182,6 +1303,7 @@ async function loadContacts() {
   loadNudges();
   loadDuplicates();
   loadReviewDueCount();
+  initRememberCount();
 }
 
 async function loadDuplicates() {
@@ -2815,12 +2937,22 @@ document.addEventListener('click', (e) => {
 
 // Keyboard: / focuses search, Esc closes, ←/→ advance review when open.
 window.addEventListener('keydown', (e) => {
-  // Review mode claims ←/→/Esc while the overlay is visible.
+  // Review overlay claims ←/→/Esc while visible.
   if (state.review && state.review.open) {
     if (e.key === 'Escape')       { e.preventDefault(); endReview(); return; }
     if (e.key === 'ArrowRight')   { e.preventDefault(); reviewNext(); return; }
     if (e.key === 'ArrowLeft')    { e.preventDefault(); reviewSkip(); return; }
     return; // ignore other keys (including /) while reviewing
+  }
+  // Remember view claims Space/←/→ when active.
+  if (state.view === 'remember' && state.remember && state.remember.current) {
+    if (e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      if (!state.remember.revealed) revealRememberCard();
+      return;
+    }
+    if (e.key === 'ArrowRight') { e.preventDefault(); rememberDone(); return; }
+    if (e.key === 'ArrowLeft')  { e.preventDefault(); rememberSkip(); return; }
   }
   if (e.key === '/' && document.activeElement.tagName !== 'INPUT') {
     e.preventDefault();
@@ -2977,6 +3109,174 @@ async function reviewNext() {
 async function reviewSkip() {
   state.review.skip += 1;
   await loadReviewPerson();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Remember view — flashcard recall for contact-specific information.
+// Front: name + avatar prompt ("what do you know?")
+// Back: practical notes, personality, goals, Gloss context, special dates.
+// Space/click = reveal · → = "Got it" (marks reviewed) · ← = skip
+// ═══════════════════════════════════════════════════════════════════════════
+state.remember = { skip: 0, current: null, reviewed: 0, total: 0, loading: false, revealed: false };
+
+async function initRememberCount() {
+  try {
+    const { count } = await api('/api/people/review/due?days=30');
+    const el = document.getElementById('count-remember');
+    if (el) el.textContent = count > 0 ? count : '';
+  } catch {}
+}
+
+async function loadRemember() {
+  document.getElementById('remember-loading').style.display = 'block';
+  document.getElementById('remember-empty-view').style.display = 'none';
+  document.getElementById('remember-topbar').style.display = 'none';
+  document.getElementById('remember-card').style.display = 'none';
+  state.remember.skip = 0;
+  state.remember.reviewed = 0;
+  try {
+    const { count } = await api('/api/people/review/due?days=30');
+    state.remember.total = count;
+    if (!count) {
+      document.getElementById('remember-loading').style.display = 'none';
+      document.getElementById('remember-empty-view').style.display = 'flex';
+      return;
+    }
+    await loadRememberCard();
+  } catch (e) {
+    document.getElementById('remember-loading').style.display = 'none';
+    toast('Could not load queue: ' + e.message, 'err');
+  }
+}
+
+async function loadRememberCard() {
+  if (state.remember.loading) return;
+  state.remember.loading = true;
+  state.remember.revealed = false;
+  try {
+    const { person } = await api('/api/people/review/next?skip=' + state.remember.skip);
+    state.remember.current = person;
+    document.getElementById('remember-loading').style.display = 'none';
+    if (!person) {
+      document.getElementById('remember-topbar').style.display = 'none';
+      document.getElementById('remember-card').style.display = 'none';
+      document.getElementById('remember-empty-view').style.display = 'flex';
+      initRememberCount();
+      return;
+    }
+    renderRememberFront(person);
+    updateRememberProgress();
+    document.getElementById('remember-topbar').style.display = 'flex';
+    document.getElementById('remember-card').style.display = 'block';
+    document.getElementById('remember-front').classList.remove('hide');
+    document.getElementById('remember-back').classList.remove('show');
+  } catch (e) {
+    toast('Could not load card: ' + e.message, 'err');
+  } finally {
+    state.remember.loading = false;
+  }
+}
+
+function renderRememberFront(p) {
+  const words = (p.contact || '').trim().split(/\s+/);
+  const initials = words.map(w => w[0] || '').join('').slice(0, 2).toUpperCase();
+  document.getElementById('remember-avatar').textContent = initials;
+  document.getElementById('remember-front-name').textContent = p.contact;
+  document.getElementById('remember-front-rel').textContent = p.profile?.relationship_type || '';
+}
+
+function revealRememberCard() {
+  const p = state.remember.current;
+  if (!p || state.remember.revealed) return;
+  state.remember.revealed = true;
+  renderRememberBack(p);
+  document.getElementById('remember-front').classList.add('hide');
+  document.getElementById('remember-back').classList.add('show');
+}
+
+function renderRememberBack(p) {
+  document.getElementById('remember-back-name').textContent = p.contact;
+  const bits = [];
+  if (p.stats?.last_contact_date) bits.push('last contact ' + daysAgo(p.stats.last_contact_date));
+  if (p.last_reviewed_at) bits.push('reviewed ' + daysAgo(p.last_reviewed_at.slice(0, 10)));
+  else bits.push('never reviewed');
+  document.getElementById('remember-back-meta').textContent = bits.join(' · ');
+
+  const facts = [];
+  const prof = p.profile;
+  if (prof?.practical_notes)    facts.push({ label: 'Practical',    body: prof.practical_notes });
+  if (prof?.personality_notes)  facts.push({ label: 'Personality',  body: prof.personality_notes });
+  if (prof?.relationship_goals) facts.push({ label: 'Goal',         body: prof.relationship_goals });
+  if (p.gloss?.growth_note) facts.push({ label: 'Growth note', body: p.gloss.growth_note });
+  if (p.gloss?.recent_context) {
+    let ctx = p.gloss.recent_context;
+    if (Array.isArray(ctx)) ctx = ctx.join('\n');
+    if (typeof ctx === 'string' && ctx.trim()) facts.push({ label: 'Recent context', body: ctx });
+  }
+  if (Array.isArray(p.special_dates) && p.special_dates.length) {
+    const sd = p.special_dates
+      .map(d => `${d.month}/${d.day}${d.year ? '/' + d.year : ''} — ${d.type}${d.label ? ' (' + d.label + ')' : ''}`)
+      .join('\n');
+    facts.push({ label: 'Special dates', body: sd });
+  }
+  const tl = (p.timeline || []).slice(0, 3);
+  if (tl.length) {
+    const tlText = tl.map(t => {
+      const when = t.date || '';
+      if (t.kind === 'message') return `${when} · ${(t.data.text || '').slice(0, 80)}`;
+      if (t.kind === 'email')   return `${when} · email: ${t.data.subject || ''}`;
+      if (t.kind === 'call')    return `${when} · call (${t.data.duration_seconds || 0}s)`;
+      return when;
+    }).join('\n');
+    facts.push({ label: 'Recent activity', body: tlText });
+  }
+
+  const el = document.getElementById('remember-facts');
+  if (!facts.length) {
+    el.innerHTML = '<div class="remember-no-facts">No notes on file — just a name.</div>';
+  } else {
+    el.innerHTML = facts.map(f =>
+      `<div class="remember-fact">
+        <div class="remember-fact-label">${esc(f.label)}</div>
+        <div class="remember-fact-body">${esc(f.body)}</div>
+      </div>`
+    ).join('');
+  }
+}
+
+function updateRememberProgress() {
+  const total = state.remember.total || 1;
+  const done  = state.remember.reviewed;
+  document.getElementById('remember-prog-fill').style.width = Math.round((done / total) * 100) + '%';
+  document.getElementById('remember-session-label').textContent = `${done} of ${total}`;
+}
+
+async function rememberDone() {
+  const p = state.remember.current;
+  if (!p) return;
+  if (p.person_id) {
+    try {
+      await api('/api/people/review/' + p.person_id + '/reviewed', { method: 'POST' });
+      state.remember.reviewed += 1;
+      state.remember.total = Math.max(0, state.remember.total - 1);
+    } catch (e) {
+      toast('Could not mark reviewed: ' + e.message, 'err');
+      return;
+    }
+  }
+  await loadRememberCard();
+}
+
+async function rememberSkip() {
+  state.remember.skip += 1;
+  await loadRememberCard();
+}
+
+function endRemember() {
+  document.getElementById('remember-topbar').style.display = 'none';
+  document.getElementById('remember-card').style.display = 'none';
+  document.getElementById('remember-empty-view').style.display = 'flex';
+  initRememberCount();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
