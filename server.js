@@ -50,7 +50,7 @@ const {
   listAddressBook, getAddressBookContact, findAddressBookByIdentifiers, addressBookStats,
   rebuildPeople, resolvePerson, getPerson, mergePeople, rejectMergePair, findDuplicateCandidates,
   getPeopleReviewNext, markPersonReviewed, countPeopleDueForReview,
-  getOverview, getSuiteStatusMetrics, searchAll,
+  getOverview, getSyncStatus, getSuiteStatusMetrics, searchAll,
   getSetting, saveSetting,
   upsertSpecialDate, listUpcomingSpecialDates, listSpecialDates, deleteSpecialDate,
   getRecentSentMessagesForStyle,
@@ -260,6 +260,20 @@ app.get('/api/status', (req, res) => {
 app.get('/api/overview', (req, res) => {
   try { res.json({ ok: true, db: DB_PATH, ...getOverview() }); }
   catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Consolidated sync-status for the in-app status panel.
+// Returns per-source last-sync times, health indicator, and any running jobs.
+app.get('/api/sync-status', (req, res) => {
+  try {
+    const status = getSyncStatus();
+    const running = [];
+    for (const [date, job] of jobs) {
+      if (job.running) running.push(date);
+    }
+    status.collection.running_dates = running;
+    res.json(status);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Unified search across messages, emails, and contacts.

@@ -190,6 +190,15 @@ nav.nav { padding: 10px 10px 6px; display: flex; flex-direction: column; gap: 2p
 .st-row .v { font-size: 12px; color: var(--text); }
 .st-row .v.stale { color: var(--yellow); }
 .st-row .v.ok    { color: var(--green); }
+#settings-btn { position: relative; }
+.health-dot {
+  position: absolute; width: 7px; height: 7px; border-radius: 50%;
+  top: 3px; right: 3px; background: transparent;
+  border: 2px solid var(--bg); pointer-events: none;
+}
+.health-dot.healthy { background: var(--green); }
+.health-dot.stale   { background: var(--yellow); }
+.health-dot.error   { background: var(--red); }
 
 /* ─── Main content area ──────────────────────────────────────────────── */
 main.view {
@@ -722,7 +731,7 @@ a.tl-title:hover { color: var(--accent); text-decoration: underline; }
     <div class="search-results" id="search-results"></div>
   </div>
   <div class="topbar-actions">
-    <button class="icon-btn" id="settings-btn" title="Settings">⚙</button>
+    <button class="icon-btn" id="settings-btn" title="Settings">⚙<span id="health-dot" class="health-dot"></span></button>
   </div>
 </header>
 
@@ -2781,27 +2790,95 @@ async function loadSettingsStatus() {
   if (!el) return;
   el.innerHTML = '<div style="color:var(--muted)">Loading…</div>';
   try {
-    const s = await api('/api/status');
-    const last = s.last_run;
-    const lastLabel = last
-      ? `${last.date} · ${last.messages_count || 0} msg, ${last.emails_count || 0} email`
-      : '—';
-    const calLabel = s.calendar?.last_synced
-      ? `${new Date(s.calendar.last_synced).toLocaleString()} · ${s.calendar.upcoming_count || 0} upcoming`
-      : '—';
-    const glossLabel = s.gloss?.last_pushed
-      ? `${new Date(s.gloss.last_pushed).toLocaleString()} · ${s.gloss.priority || 0} priority / ${s.gloss.total || 0} contacts · ${s.gloss.notes || 0} notes`
-      : (s.gloss?.total ? `${s.gloss.total} cached` : 'never pushed — set up Gloss→Comms sync');
-    const totals = s.totals || {};
-    const msgOk = (totals.total_messages || 0) > 0;
-    const msgStatus = msgOk ? '✓ collecting' : '✗ no messages yet — grant Full Disk Access in System Settings → Privacy & Security';
+    const s = await api('/api/sync-status');
+
+    function ageFmt(iso) {
+      if (!iso) return null;
+      const age = Date.now() - new Date(iso).getTime();
+      const m = Math.floor(age / 60000);
+      if (m < 2) return 'just now';
+      if (m < 60) return `${m}m ago`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h}h ago`;
+      return `${Math.floor(h / 24)}d ago`;
+    }
+
+    function dot(color) {
+      return `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${color};margin-right:5px;vertical-align:middle;flex-shrink:0"></span>`;
+    }
+
+    // Daily collection row
+    const run = s.collection?.last_run;
+    let collLabel, collColor;
+    if (s.collection?.running_dates?.length) {
+      collLabel = `collecting ${s.collection.running_dates.join(', ')}…`;
+      collColor = 'var(--yellow)';
+    } else if (!run) {
+      collLabel = 'never collected';
+      collColor = 'var(--muted)';
+    } else {
+      const days = s.collection.days_since_last;
+      collLabel = `${run.date} · ${run.messages_count || 0} msg, ${run.emails_count || 0} email`;
+      collColor = days > 7 ? 'var(--red)' : days > 2 ? 'var(--yellow)' : 'var(--green)';
+    }
+
+    // Calendar row
+    const cal = s.calendar;
+    let calLabel, calColor;
+    if (!cal?.last_synced) {
+      calLabel = 'never synced';
+      calColor = 'var(--muted)';
+    } else {
+      const ageH = (Date.now() - new Date(cal.last_synced).getTime()) / 3600000;
+      calLabel = `${ageFmt(cal.last_synced)} · ${cal.upcoming_count || 0} upcoming`;
+      calColor = ageH > 6 ? 'var(--yellow)' : 'var(--green)';
+    }
+
+    // Gmail row
+    const gmailCount = s.gmail?.accounts?.length || 0;
+    const gmailLabel = gmailCount
+      ? `${gmailCount} account${gmailCount > 1 ? 's' : ''} connected`
+      : 'no accounts connected';
+    const gmailColor = gmailCount ? 'var(--green)' : 'var(--muted)';
+
+    // Contacts rows — one per source/account from address_book_sync_log
+    let contactRows = '';
+    if (s.contacts?.length) {
+      for (const c of s.contacts) {
+        const src = c.source === 'apple' ? 'Apple' : 'Google';
+        const acct = c.source_account && c.source_account !== 'default' ? ` (${c.source_account})` : '';
+        const label = `${src} Contacts${acct}`;
+        const color = c.error ? 'var(--red)' : 'var(--green)';
+        const detail = c.error
+          ? `error · ${String(c.error).slice(0, 50)}`
+          : `${ageFmt(c.ran_at)} · ${c.total || 0} contacts`;
+        contactRows += `<div class="st-row"><span class="k">${esc(label)}</span><span class="v">${dot(color)}${esc(detail)}</span></div>`;
+      }
+    } else {
+      contactRows = `<div class="st-row"><span class="k">Contacts</span><span class="v" style="color:var(--muted)">not synced yet</span></div>`;
+    }
+
+    // Gloss row
+    const gloss = s.gloss;
+    let glossLabel, glossColor;
+    if (!gloss?.last_pushed) {
+      glossLabel = 'never pushed — set up Gloss→Comms sync';
+      glossColor = 'var(--muted)';
+    } else {
+      glossLabel = `${ageFmt(gloss.last_pushed)} · ${gloss.total || 0} contacts`;
+      glossColor = 'var(--text-dim)';
+    }
+
     el.innerHTML = `
-      <div class="st-row"><span class="k">iMessage access</span><span class="v" style="color:${msgOk ? 'var(--green)' : 'var(--red)'}">${esc(msgStatus)}</span></div>
-      <div class="st-row"><span class="k">Last collection</span><span class="v">${esc(lastLabel)}</span></div>
-      <div class="st-row"><span class="k">Calendar sync</span><span class="v">${esc(calLabel)}</span></div>
-      <div class="st-row"><span class="k">Gloss push</span><span class="v">${esc(glossLabel)}</span></div>
-      <div class="st-row"><span class="k">Totals</span><span class="v">${totals.total_runs || 0} runs · ${totals.total_messages || 0} msg · ${totals.total_emails || 0} email</span></div>
+      <div class="st-row"><span class="k">Daily collection</span><span class="v">${dot(collColor)}${esc(collLabel)}</span></div>
+      <div class="st-row"><span class="k">Gmail</span><span class="v">${dot(gmailColor)}${esc(gmailLabel)}</span></div>
+      <div class="st-row"><span class="k">Calendar</span><span class="v">${dot(calColor)}${esc(calLabel)}</span></div>
+      ${contactRows}
+      <div class="st-row"><span class="k">Gloss</span><span class="v" style="color:${glossColor}">${esc(glossLabel)}</span></div>
     `;
+
+    const healthDot = document.getElementById('health-dot');
+    if (healthDot) healthDot.className = `health-dot ${s.health || 'healthy'}`;
   } catch (e) {
     el.innerHTML = `<div style="color:var(--red)">Status error: ${esc(e.message)}</div>`;
   }
@@ -3515,6 +3592,9 @@ function copyDraft() {
 
   // Refresh nudges periodically
   setInterval(loadNudges, 60_000);
+
+  // Populate health dot without waiting for settings modal to open
+  loadSettingsStatus();
 })();
 </script>
 <script>
