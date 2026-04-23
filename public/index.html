@@ -524,6 +524,8 @@ a.tl-title:hover { color: var(--accent); text-decoration: underline; }
 .back-link-btn:hover { color: var(--accent); }
 @media (max-width: 780px) { body.detail-open .back-link-btn { display: inline-block; } }
 </style>
+<script>window.__SUITE_CURRENT__ = 'comms';</script>
+<script src="https://maestro-nc.fly.dev/suite-switcher.js" defer></script>
 </head>
 <body>
 
@@ -2911,10 +2913,22 @@ function copyDraft() {
     history.replaceState({}, '', '/');
   }
 
-  // Initial view from hash
-  const h = location.hash.replace(/^#\//, '').split('/')[0];
-  if (h && ['contacts','calendar','dates','address-book','daily'].includes(h)) setView(h);
-  else setView('contacts');
+  // Initial view from hash. Supports deep-link to a specific contact:
+  //   #/contacts               → list
+  //   #/contacts/<encoded name> → select + open detail (used by Gloss's
+  //                               "View in Comms" button on person pages)
+  const hashParts = location.hash.replace(/^#\//, '').split('/');
+  const h = hashParts[0];
+  if (h && ['contacts','calendar','dates','address-book','daily'].includes(h)) {
+    setView(h);
+    if (h === 'contacts' && hashParts[1]) {
+      const target = decodeURIComponent(hashParts.slice(1).join('/'));
+      // Defer to let contacts load, then open the detail pane.
+      setTimeout(() => selectContact(target).catch(() => {
+        toast(`No Comms profile for "${target}"`, 'err');
+      }), 200);
+    }
+  } else setView('contacts');
 
   // Refresh nudges periodically
   setInterval(loadNudges, 60_000);

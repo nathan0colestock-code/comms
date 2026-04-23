@@ -7,6 +7,14 @@
       "runtimeArgs": ["server.js"],
       "port": 3748,
       "autoPort": false
+    },
+    {
+      "name": "gloss",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["/Users/nathancolestock/gloss/server.js"],
+      "port": 3747,
+      "autoPort": false,
+      "cwd": "/Users/nathancolestock/gloss"
     }
   ]
 }
