@@ -22,6 +22,7 @@ const os       = require('os');
 const crypto   = require('crypto');
 const Database = require('better-sqlite3');
 const { fetchEmailsForDate } = require('./gmail');
+const { importCalls: importCallsFromSource } = require('./calls');
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -352,6 +353,23 @@ function openDb() {
     CREATE INDEX IF NOT EXISTS idx_special_dates_contact  ON special_dates(contact COLLATE NOCASE);
     CREATE INDEX IF NOT EXISTS idx_special_dates_month_day ON special_dates(month, day);
 
+    -- macOS phone / FaceTime call history. Sourced from
+    -- ~/Library/Application Support/CallHistoryDB/CallHistory.storedata via
+    -- calls.js. id is the ZUNIQUE_ID from the source record so re-imports
+    -- idempotently upsert.
+    CREATE TABLE IF NOT EXISTS calls (
+      id               TEXT PRIMARY KEY,
+      date             TEXT NOT NULL,           -- YYYY-MM-DD (local)
+      contact          TEXT NOT NULL,           -- resolved name, or phone if unknown
+      phone            TEXT,                    -- normalized E.164
+      direction        TEXT NOT NULL,           -- 'incoming'|'outgoing'|'missed'
+      duration_seconds INTEGER,
+      answered         INTEGER NOT NULL DEFAULT 1,
+      started_at       TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_calls_contact ON calls(contact COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_calls_date    ON calls(date);
+
     CREATE INDEX IF NOT EXISTS idx_messages_date        ON messages(date);
     CREATE INDEX IF NOT EXISTS idx_emails_date          ON emails(date);
     CREATE INDEX IF NOT EXISTS idx_messages_contact     ON messages(contact COLLATE NOCASE);
@@ -411,6 +429,14 @@ function openDb() {
   const gcCols = db.pragma('table_info(gloss_contacts)').map(c => c.name);
   if (!gcCols.includes('person_id')) db.exec('ALTER TABLE gloss_contacts ADD COLUMN person_id INTEGER REFERENCES people(id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_gloss_contacts_person ON gloss_contacts(person_id)');
+
+  // Migration for runs: calls_count.
+  const runCols = db.pragma('table_info(runs)').map(c => c.name);
+  if (!runCols.includes('calls_count')) db.exec('ALTER TABLE runs ADD COLUMN calls_count INTEGER DEFAULT 0');
+
+  // Migration for people: last_reviewed_at (Feature 3).
+  const peopleCols = db.pragma('table_info(people)').map(c => c.name);
+  if (!peopleCols.includes('last_reviewed_at')) db.exec('ALTER TABLE people ADD COLUMN last_reviewed_at TEXT');
 
   return db;
 }
@@ -746,6 +772,72 @@ function testMessagesAccess() {
 // Core collect — called by CLI and server
 // ---------------------------------------------------------------------------
 
+/**
+ * Import macOS call-history records from CallHistory.storedata.
+ * Idempotent: keyed on the source UUID (ZUNIQUE_ID). Pulls records from
+ * (date - 2 days) onward to tolerate slight clock drift and cross-device
+ * sync delay from iCloud call-history, then inserts any new ones.
+ *
+ * Resolves phone → contact via findAddressBookByIdentifiers; falls back to
+ * the source row's name hint, then the raw phone number.
+ *
+ * Returns { total: recordsRead, imported: newlyInserted }.
+ */
+function collectCalls(date) {
+  // Lookback gives iCloud-synced calls from other devices a chance to land.
+  let since = null;
+  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const d = new Date(date + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() - 2);
+    since = d.toISOString();
+  }
+
+  const db = openDb();
+  try {
+    const existing = db.prepare('SELECT id FROM calls WHERE id = ?');
+    const insert = db.prepare(`
+      INSERT INTO calls (id, date, contact, phone, direction, duration_seconds, answered, started_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    let imported = 0;
+    const res = importCallsFromSource({
+      since,
+      upsertCall: (row) => {
+        if (existing.get(row.id)) return; // already imported — skip
+        // Resolve a name via the address book.
+        let contactName = null;
+        if (row.phone) {
+          try {
+            const matches = findAddressBookByIdentifiers({ phones: [row.phone] });
+            if (matches.length) {
+              const m = matches[0];
+              contactName = (m.display_name ||
+                [m.given_name, m.family_name].filter(Boolean).join(' ') ||
+                null);
+            }
+          } catch { /* resolver is best-effort */ }
+        }
+        if (!contactName) contactName = row.name_hint || row.phone_raw || row.phone || 'Unknown';
+        insert.run(
+          row.id,
+          row.date,
+          contactName,
+          row.phone,
+          row.direction,
+          row.duration_seconds,
+          row.answered,
+          row.iso,
+        );
+        imported++;
+      },
+    });
+    return { total: res.total, imported };
+  } finally {
+    db.close();
+  }
+}
+
 async function collect(date, { onProgress } = {}) {
   const emit = onProgress || (() => {});
   const db   = openDb();
@@ -755,7 +847,7 @@ async function collect(date, { onProgress } = {}) {
   db.prepare(`INSERT INTO runs (id, date, collected_at, status) VALUES (?, ?, ?, 'running')`)
     .run(runId, date, new Date().toISOString());
 
-  let messages = [], emails = [];
+  let messages = [], emails = [], callsImported = 0;
   const warnings = [];
 
   try {
@@ -814,8 +906,27 @@ async function collect(date, { onProgress } = {}) {
         .run(messages.length, emails.length, runId);
     })();
 
-    emit({ step: 'done', messages: messages.length, emails: emails.length, warnings });
-    return { ok: true, runId, date, messages, emails, warnings };
+    // Calls — run after messages/emails so the address-book resolver can pick
+    // up any handles picked up in this run. Failures here are warnings, not
+    // fatal: the main run is already marked 'done'.
+    emit({ step: 'calls', status: 'running' });
+    try {
+      const res = collectCalls(date);
+      callsImported = res.imported;
+      db.prepare('UPDATE runs SET calls_count = ? WHERE id = ?').run(callsImported, runId);
+      emit({ step: 'calls', status: 'done', count: callsImported });
+    } catch (err) {
+      warnings.push(err.fullDiskAccessRequired
+        ? `Calls: ${err.message}`
+        : `Calls: ${err.message}`);
+      emit({
+        step: 'calls', status: 'error', error: err.message,
+        fullDiskAccessRequired: !!err.fullDiskAccessRequired,
+      });
+    }
+
+    emit({ step: 'done', messages: messages.length, emails: emails.length, calls: callsImported, warnings });
+    return { ok: true, runId, date, messages, emails, calls: callsImported, warnings };
 
   } catch (err) {
     db.prepare(`UPDATE runs SET status='error', error=? WHERE id=?`).run(err.message, runId);
@@ -1193,17 +1304,22 @@ function getContactDetail(name, { recentLimit = 50 } = {}) {
       SELECT
         (SELECT COUNT(*) FROM messages WHERE contact IN (${ph}) COLLATE NOCASE) AS message_count,
         (SELECT COUNT(*) FROM emails   WHERE contact IN (${ph}) COLLATE NOCASE) AS email_count,
+        (SELECT COUNT(*) FROM calls    WHERE contact IN (${ph}) COLLATE NOCASE) AS call_count,
         (SELECT MIN(date) FROM (
            SELECT MIN(date) date FROM messages WHERE contact IN (${ph}) COLLATE NOCASE
            UNION ALL
            SELECT MIN(date) date FROM emails   WHERE contact IN (${ph}) COLLATE NOCASE
+           UNION ALL
+           SELECT MIN(date) date FROM calls    WHERE contact IN (${ph}) COLLATE NOCASE
          )) AS first_contact_date,
         (SELECT MAX(date) FROM (
            SELECT MAX(date) date FROM messages WHERE contact IN (${ph}) COLLATE NOCASE
            UNION ALL
            SELECT MAX(date) date FROM emails   WHERE contact IN (${ph}) COLLATE NOCASE
+           UNION ALL
+           SELECT MAX(date) date FROM calls    WHERE contact IN (${ph}) COLLATE NOCASE
          )) AS last_contact_date
-    `).get(...nameArgs, ...nameArgs, ...nameArgs, ...nameArgs, ...nameArgs, ...nameArgs);
+    `).get(...nameArgs, ...nameArgs, ...nameArgs, ...nameArgs, ...nameArgs, ...nameArgs, ...nameArgs, ...nameArgs, ...nameArgs);
 
     const messages = db.prepare(`
       SELECT id, date, direction, sender, text, sent_at, handle_id
@@ -1215,6 +1331,12 @@ function getContactDetail(name, { recentLimit = 50 } = {}) {
       SELECT id, date, direction, contact, email_address, subject, snippet, account, thread_id
       FROM emails WHERE contact IN (${ph}) COLLATE NOCASE
       ORDER BY rowid DESC LIMIT ?
+    `).all(...nameArgs, recentLimit);
+
+    const calls = db.prepare(`
+      SELECT id, date, direction, duration_seconds, answered, started_at, phone, contact
+      FROM calls WHERE contact IN (${ph}) COLLATE NOCASE
+      ORDER BY started_at DESC LIMIT ?
     `).all(...nameArgs, recentLimit);
 
     const handles = new Set();
@@ -1305,6 +1427,21 @@ function getContactDetail(name, { recentLimit = 50 } = {}) {
       specialDates.push(r);
     }
 
+    // Unified chronological timeline — messages + emails + calls + gloss
+    // notes + calendar events. Each row tagged with a `kind` so the UI can
+    // pick a badge/renderer; `ts` is the sort key (ISO datetime or date).
+    const timeline = [];
+    for (const m of messages) {
+      timeline.push({ kind: 'message', ts: m.sent_at || m.date, date: m.date, data: m });
+    }
+    for (const e of emails) {
+      timeline.push({ kind: 'email', ts: e.date, date: e.date, data: e });
+    }
+    for (const c of calls) {
+      timeline.push({ kind: 'call', ts: c.started_at || c.date, date: c.date, data: c });
+    }
+    timeline.sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
+
     return {
       contact: name,
       person_id: person ? person.person_id : null,
@@ -1316,10 +1453,12 @@ function getContactDetail(name, { recentLimit = 50 } = {}) {
       insight: insight || null,
       messages,
       emails,
+      calls,
       calendar_events: calendarEvents,
       gloss_notes: glossNotes,
       profile: profile || null,
       special_dates: specialDates,
+      timeline,
     };
   } finally { db.close(); }
 }
@@ -2646,6 +2785,7 @@ function getOverview() {
       SELECT
         (SELECT COUNT(*) FROM messages) AS total_messages,
         (SELECT COUNT(*) FROM emails)   AS total_emails,
+        (SELECT COUNT(*) FROM calls)    AS total_calls,
         (SELECT COUNT(*) FROM runs WHERE status='done') AS total_runs
     `).get();
     const calendarInfo = db.prepare(`
@@ -2691,6 +2831,7 @@ function getSuiteStatusMetrics() {
     return {
       total_messages: count('SELECT COUNT(*) AS n FROM messages'),
       total_emails:   count('SELECT COUNT(*) AS n FROM emails'),
+      total_calls:    count('SELECT COUNT(*) AS n FROM calls'),
       total_runs:     count('SELECT COUNT(*) AS n FROM runs'),
       gmail_accounts: count('SELECT COUNT(DISTINCT id) AS n FROM gmail_accounts'),
       gloss_contacts: count('SELECT COUNT(*) AS n FROM gloss_contacts'),
@@ -2733,7 +2874,7 @@ function searchAll(query, { limit = 25 } = {}) {
 }
 
 module.exports = {
-  collect, getRuns, getRunDetail, getMissingDates,
+  collect, collectCalls, getRuns, getRunDetail, getMissingDates,
   getGmailAccounts, getGmailAccountsWithTokens, saveGmailAccount, deleteGmailAccount, saveGmailTokens,
   testMessagesAccess,
   // Gloss profiles
