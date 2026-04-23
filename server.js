@@ -108,8 +108,9 @@ function parseAuthCookie(req) {
 }
 function requireAuth(req, res, next) {
   if (AUTH_BYPASS.has(req.path)) return next();
-  // Bearer token (Gloss → Comms push) bypasses cookie auth.
-  if (req.path === '/api/gloss/contacts' && requireApiKey(req)) return next();
+  // Bearer / X-API-Key is accepted on any /api/* route (Gloss push, tests,
+  // MCP, curl). Cookie auth is for the browser UI.
+  if (req.path.startsWith('/api/') && requireApiKey(req)) return next();
   if (verifyCookie(parseAuthCookie(req))) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'auth required' });
   return res.redirect('/login');
