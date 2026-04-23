@@ -75,7 +75,8 @@ const COOKIE_MAX_AGE_MS = 30 * 24 * 3600 * 1000;
 const AUTH_BYPASS = new Set([
   '/login', '/api/login', '/api/logout', '/api/health',
   '/api/gmail/callback',
-  '/favicon.ico', '/favicon.svg',
+  '/favicon.ico', '/favicon.svg', '/apple-touch-icon.png', '/manifest.json',
+  '/icon-192.png', '/icon-512.png',
 ]);
 
 function signCookie(payload) {
