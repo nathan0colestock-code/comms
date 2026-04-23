@@ -150,7 +150,22 @@ GET  /api/email-helper/runs             — recent inbox-triage runs
 GET  /api/email-helper/unsubscribes     — pending unsubscribe review queue
 POST /api/email-helper/unsubscribes/:id/{approve,dismiss}
 POST /api/email-helper/run              — manually trigger the triage job
+GET  /api/people/review/next?skip=N     — next person in the review queue
+POST /api/people/review/:id/reviewed    — mark reviewed
+GET  /api/people/review/due?days=N      — count of people due for review
 ```
+
+## What it collects (continued)
+
+| Source | What's stored | What's skipped |
+|--------|--------------|----------------|
+| **macOS call history** | Call timestamp, direction (incoming/outgoing/missed), duration, resolved contact name, phone | Call recordings |
+
+Phone call history is ingested read-only from `~/Library/Application Support/CallHistoryDB/CallHistory.storedata` (requires Full Disk Access permission once). Calls appear in each contact's unified timeline alongside messages and emails.
+
+## People review
+
+An on-demand flashcard mode for keeping relationships warm. Click **Start review** in the contacts sidebar — comms picks the person you've gone longest without reviewing (biased toward priority ≥ 1 people and active relationships) and shows everything it knows about them on one card: last contact, profile, gloss notes, upcoming dates, recent timeline. Use **Next** to mark reviewed + advance, **Skip** to pass without spending the review, **End** to close. Keyboard: → / ← / Esc. A counter in the sidebar shows how many people haven't been reviewed in 30+ days — no push notifications.
 
 ### Scheduled inbox triage
 
