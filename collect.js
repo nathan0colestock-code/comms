@@ -360,6 +360,38 @@ function openDb() {
     CREATE INDEX IF NOT EXISTS idx_gloss_contacts_prio  ON gloss_contacts(priority DESC);
     CREATE INDEX IF NOT EXISTS idx_gloss_notes_contact  ON gloss_notes(contact COLLATE NOCASE);
     CREATE INDEX IF NOT EXISTS idx_contact_aliases_canon ON contact_aliases(canonical COLLATE NOCASE);
+
+    -- Email-helper tables: lazy-cached context per sender, unsub review queue,
+    -- and per-run audit log.
+    CREATE TABLE IF NOT EXISTS email_contact_context (
+      sender_email TEXT PRIMARY KEY,
+      context_json TEXT NOT NULL,
+      built_at     TEXT NOT NULL,
+      stale_after  TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS email_unsub_queue (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id       TEXT NOT NULL UNIQUE,
+      thread_id        TEXT NOT NULL,
+      account          TEXT NOT NULL,
+      sender_email     TEXT NOT NULL,
+      sender_name      TEXT,
+      subject          TEXT,
+      list_unsubscribe TEXT,
+      classified_as    TEXT NOT NULL,
+      status           TEXT NOT NULL DEFAULT 'pending',
+      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      actioned_at      TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_email_unsub_status ON email_unsub_queue(status);
+    CREATE INDEX IF NOT EXISTS idx_email_unsub_sender ON email_unsub_queue(sender_email);
+    CREATE TABLE IF NOT EXISTS email_helper_runs (
+      id           TEXT PRIMARY KEY,
+      started_at   TEXT NOT NULL,
+      ended_at     TEXT,
+      summary_json TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_email_helper_runs_started ON email_helper_runs(started_at DESC);
   `);
 
   // Migrations for emails table
