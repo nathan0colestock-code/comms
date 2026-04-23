@@ -22,8 +22,27 @@ function makeClient() {
   );
 }
 
+// Returns { calendars: [{id, summary, primary, backgroundColor}], refreshedTokens }
+async function fetchCalendarList(tokenJson) {
+  const client = makeClient();
+  client.setCredentials(JSON.parse(tokenJson));
+  let refreshedTokens = null;
+  client.on('tokens', t => { refreshedTokens = t; });
+  const calendar = google.calendar({ version: 'v3', auth: client });
+  const { data } = await calendar.calendarList.list({ minAccessRole: 'reader' });
+  const calendars = (data.items || []).map(c => ({
+    id: c.id,
+    summary: c.summary || c.id,
+    primary: !!c.primary,
+    backgroundColor: c.backgroundColor || null,
+  }));
+  return { calendars, refreshedTokens };
+}
+
 // Returns { events: [...], refreshedTokens }
-async function fetchCalendarEvents(tokenJson, { days = 14 } = {}) {
+// Window is (now - pastDays) .. (now + futureDays). Past events are needed so
+// contact timelines can show what already happened; future events feed briefs.
+async function fetchCalendarEvents(tokenJson, { pastDays = 180, futureDays = 30, calendarIds = ['primary'] } = {}) {
   const client = makeClient();
   client.setCredentials(JSON.parse(tokenJson));
 
@@ -32,69 +51,62 @@ async function fetchCalendarEvents(tokenJson, { days = 14 } = {}) {
 
   const calendar = google.calendar({ version: 'v3', auth: client });
 
-  const now = new Date();
-  const end = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+  const now = Date.now();
+  const start = new Date(now - pastDays * 24 * 60 * 60 * 1000);
+  const end = new Date(now + futureDays * 24 * 60 * 60 * 1000);
 
+  const ids = Array.isArray(calendarIds) && calendarIds.length ? calendarIds : ['primary'];
   const events = [];
-  let pageToken;
-  let selfEmail = null;
 
-  try {
-    do {
-      const { data } = await calendar.events.list({
-        calendarId: 'primary',
-        timeMin: now.toISOString(),
-        timeMax: end.toISOString(),
-        singleEvents: true,
-        orderBy: 'startTime',
-        maxResults: 250,
-        pageToken,
-      });
-
-      if (!selfEmail) {
-        // events.list doesn't expose calendar owner; fall back to first self-attendee hit.
-        for (const ev of data.items || []) {
-          const selfAttendee = (ev.attendees || []).find(a => a.self);
-          if (selfAttendee?.email) { selfEmail = selfAttendee.email.toLowerCase(); break; }
-        }
-      }
-
-      for (const ev of data.items || []) {
-        if (ev.status === 'cancelled') continue;
-
-        const attendees = (ev.attendees || []).map(a => ({
-          name: a.displayName || null,
-          email: (a.email || '').toLowerCase(),
-          response: a.responseStatus || null,
-        }));
-
-        // Skip events the user declined
-        const selfAtt = (ev.attendees || []).find(a => a.self);
-        if (selfAtt && selfAtt.responseStatus === 'declined') continue;
-
-        const startDateTime = ev.start?.dateTime || ev.start?.date || null;
-        const endDateTime = ev.end?.dateTime || ev.end?.date || null;
-        if (!startDateTime) continue;
-
-        events.push({
-          id: ev.id,
-          calendar_id: 'primary',
-          date: deriveLocalDate(ev.start),
-          start_time: startDateTime,
-          end_time: endDateTime,
-          title: ev.summary || '(no title)',
-          description: ev.description || null,
-          location: ev.location || null,
-          attendees,
-          html_link: ev.htmlLink || null,
+  for (const calId of ids) {
+    let pageToken;
+    try {
+      do {
+        const { data } = await calendar.events.list({
+          calendarId: calId,
+          timeMin: start.toISOString(),
+          timeMax: end.toISOString(),
+          singleEvents: true,
+          orderBy: 'startTime',
+          maxResults: 250,
+          pageToken,
         });
-      }
 
-      pageToken = data.nextPageToken;
-    } while (pageToken);
-  } catch (err) {
-    console.warn(`[calendar] list error: ${err.message}`);
-    throw err;
+        for (const ev of data.items || []) {
+          if (ev.status === 'cancelled') continue;
+
+          const attendees = (ev.attendees || []).map(a => ({
+            name: a.displayName || null,
+            email: (a.email || '').toLowerCase(),
+            response: a.responseStatus || null,
+          }));
+
+          const selfAtt = (ev.attendees || []).find(a => a.self);
+          if (selfAtt && selfAtt.responseStatus === 'declined') continue;
+
+          const startDateTime = ev.start?.dateTime || ev.start?.date || null;
+          const endDateTime = ev.end?.dateTime || ev.end?.date || null;
+          if (!startDateTime) continue;
+
+          events.push({
+            id: ev.id,
+            calendar_id: calId,
+            date: deriveLocalDate(ev.start),
+            start_time: startDateTime,
+            end_time: endDateTime,
+            title: ev.summary || '(no title)',
+            description: ev.description || null,
+            location: ev.location || null,
+            attendees,
+            html_link: ev.htmlLink || null,
+          });
+        }
+
+        pageToken = data.nextPageToken;
+      } while (pageToken);
+    } catch (err) {
+      console.warn(`[calendar] list error for ${calId}: ${err.message}`);
+    }
   }
 
   return { events, refreshedTokens };
@@ -127,4 +139,4 @@ function deriveLocalDate(start) {
   return `${y}-${m}-${day}`;
 }
 
-module.exports = { fetchCalendarEvents, getCalendarScopes, hasCalendarScope };
+module.exports = { fetchCalendarEvents, fetchCalendarList, getCalendarScopes, hasCalendarScope };

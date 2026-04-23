@@ -168,18 +168,217 @@ function openDb() {
       PRIMARY KEY (contact, week)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_messages_date       ON messages(date);
-    CREATE INDEX IF NOT EXISTS idx_emails_date         ON emails(date);
-    CREATE INDEX IF NOT EXISTS idx_messages_contact    ON messages(contact COLLATE NOCASE);
-    CREATE INDEX IF NOT EXISTS idx_emails_contact      ON emails(contact COLLATE NOCASE);
+    -- Name-equivalence table: one row per known alias → canonical mapping.
+    -- Messages/emails/notes keep their original contact strings (lossless);
+    -- queries COALESCE through this table to group variants. Invariant: canonical
+    -- is always terminal (never appears in the alias column).
+    CREATE TABLE IF NOT EXISTS contact_aliases (
+      alias      TEXT PRIMARY KEY COLLATE NOCASE,
+      canonical  TEXT NOT NULL COLLATE NOCASE,
+      reason     TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    -- Dismissed merge suggestions — don't resurface these pairs.
+    CREATE TABLE IF NOT EXISTS merge_dismissals (
+      name_a     TEXT NOT NULL COLLATE NOCASE,
+      name_b     TEXT NOT NULL COLLATE NOCASE,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (name_a, name_b)
+    );
+
+    -- User-authored profile per contact: relationship framing + free-form
+    -- notes + follow-up cadence. Unlike gloss_notes (timeline entries) these
+    -- are long-lived and only have one row per contact. followup_days = NULL
+    -- means "no reminder"; any integer is treated as the staleness threshold.
+    CREATE TABLE IF NOT EXISTS contact_profiles (
+      contact             TEXT PRIMARY KEY COLLATE NOCASE,
+      relationship_type   TEXT,
+      personality_notes   TEXT,
+      practical_notes     TEXT,
+      relationship_goals  TEXT,
+      followup_days       INTEGER,
+      updated_at          TEXT NOT NULL
+    );
+
+    -- User-authored agenda items. Scope is either a person (scope_type='person',
+    -- scope_id = contact name) or a specific calendar event (scope_type='event',
+    -- scope_id = calendar_events.id). Person-scoped items are what to talk
+    -- about next time you see them; event-scoped items belong to that meeting.
+    CREATE TABLE IF NOT EXISTS agenda_items (
+      id          TEXT PRIMARY KEY,
+      scope_type  TEXT NOT NULL,          -- 'person' | 'event'
+      scope_id    TEXT NOT NULL COLLATE NOCASE,
+      content     TEXT NOT NULL,
+      done_at     TEXT,                   -- NULL = open, ISO = checked off
+      created_at  TEXT NOT NULL,
+      updated_at  TEXT NOT NULL,
+      sort_index  INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_agenda_scope ON agenda_items(scope_type, scope_id COLLATE NOCASE);
+
+    -- Imported address-book contacts (Apple + Google). Separate from the
+    -- 'people' derived view — these are "people I know" regardless of whether
+    -- we've exchanged messages/emails/meetings. Identifiers go in a child
+    -- table so we can look up quickly by email or normalized phone number.
+    CREATE TABLE IF NOT EXISTS address_book (
+      id                 TEXT PRIMARY KEY,         -- 'source:account:source_id' composite
+      source             TEXT NOT NULL,            -- 'apple' | 'google'
+      source_account     TEXT NOT NULL,            -- Google account email; 'local' for Apple
+      source_id          TEXT NOT NULL,            -- ZUNIQUEID or Google resourceName
+      display_name       TEXT,
+      given_name         TEXT,
+      family_name        TEXT,
+      nickname           TEXT,
+      organization       TEXT,
+      job_title          TEXT,
+      emails_json        TEXT NOT NULL DEFAULT '[]',
+      phones_json        TEXT NOT NULL DEFAULT '[]',
+      photo_url          TEXT,
+      notes              TEXT,
+      source_modified_at TEXT,
+      imported_at        TEXT NOT NULL,
+      updated_at         TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ab_source  ON address_book(source, source_account);
+    CREATE INDEX IF NOT EXISTS idx_ab_display ON address_book(display_name COLLATE NOCASE);
+
+    CREATE TABLE IF NOT EXISTS address_book_identifiers (
+      address_book_id TEXT NOT NULL,
+      kind            TEXT NOT NULL,               -- 'email' | 'phone'
+      value           TEXT NOT NULL,               -- normalized: email=lowercase; phone=+E.164 when possible
+      label           TEXT,
+      PRIMARY KEY (kind, value, address_book_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_abi_value ON address_book_identifiers(kind, value);
+
+    -- Tracks per-(source, account) sync runs so the UI can show a last-sync
+    -- stamp and surface failures without a separate runs table.
+    CREATE TABLE IF NOT EXISTS address_book_sync_log (
+      source         TEXT NOT NULL,
+      source_account TEXT NOT NULL,
+      ran_at         TEXT NOT NULL,
+      total          INTEGER NOT NULL DEFAULT 0,
+      upserted       INTEGER NOT NULL DEFAULT 0,
+      removed        INTEGER NOT NULL DEFAULT 0,
+      error          TEXT,
+      PRIMARY KEY (source, source_account, ran_at)
+    );
+
+    -- User-defined conversation/meeting frameworks for the playbook generator.
+    -- Built-in models live in ai.js; these are custom additions. Key is
+    -- user-chosen (slug); label is display name; blurb is the framework
+    -- description fed into the system prompt.
+    CREATE TABLE IF NOT EXISTS playbook_models (
+      key        TEXT PRIMARY KEY,
+      label      TEXT NOT NULL,
+      blurb      TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    -- Notes about a specific contact pushed from Gloss.
+    -- One row per (Gloss page, person) mention; Comms just keeps and displays.
+    CREATE TABLE IF NOT EXISTS gloss_notes (
+      id         TEXT PRIMARY KEY,          -- Gloss block ID
+      contact    TEXT NOT NULL COLLATE NOCASE,
+      date       TEXT NOT NULL,             -- YYYY-MM-DD
+      note       TEXT NOT NULL,
+      collection TEXT,
+      gloss_url  TEXT,
+      synced_at  TEXT NOT NULL
+    );
+
+    -- Canonical person registry. One row per real human, unifying address-book
+    -- cards (across sources), gloss_contacts, and the free-text contact names
+    -- that appear in messages/emails. Rebuilt from the source tables by
+    -- rebuildPeople(); merge_lock=1 means a human overrode clustering and the
+    -- automatic rebuild should leave it alone.
+    CREATE TABLE IF NOT EXISTS people (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      display_name TEXT NOT NULL,
+      given_name   TEXT,
+      family_name  TEXT,
+      merge_lock   INTEGER NOT NULL DEFAULT 0,
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL
+    );
+
+    -- Every name variant known to resolve to a person. Seeded from address_book
+    -- (display/given/family/nickname), gloss_contacts (contact + aliases), and
+    -- contact_aliases. The resolver (resolvePerson) queries this table.
+    CREATE TABLE IF NOT EXISTS people_names (
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      name      TEXT NOT NULL COLLATE NOCASE,
+      source    TEXT,
+      PRIMARY KEY (person_id, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_people_names_name ON people_names(name COLLATE NOCASE);
+
+    -- Pairs the user has dismissed as "not the same person". The duplicate
+    -- detector consults this so a dismissed pair doesn't keep surfacing.
+    -- We always store the lower person_id as person_a so lookups are order-
+    -- independent, and keep it keyed on person_id (not signal) so the
+    -- dismissal survives merges that happen on adjacent rows.
+    CREATE TABLE IF NOT EXISTS rejected_merges (
+      person_a    INTEGER NOT NULL,
+      person_b    INTEGER NOT NULL,
+      rejected_at TEXT NOT NULL,
+      PRIMARY KEY (person_a, person_b)
+    );
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    -- Special dates: birthdays, anniversaries, deaths, memorials, custom.
+    -- Sourced from Apple Contacts, Google Contacts, or entered manually.
+    -- contact is NULL for standalone special days (no associated person).
+    CREATE TABLE IF NOT EXISTS special_dates (
+      id         TEXT PRIMARY KEY,
+      contact    TEXT COLLATE NOCASE,
+      type       TEXT NOT NULL,      -- 'birthday'|'anniversary'|'death'|'memorial'|'custom'
+      month      INTEGER NOT NULL,   -- 1-12
+      day        INTEGER NOT NULL,   -- 1-31
+      year       INTEGER,            -- NULL if unknown
+      label      TEXT,               -- custom label; required for type='custom'
+      notes      TEXT,
+      source     TEXT NOT NULL DEFAULT 'manual', -- 'apple'|'google'|'manual'
+      source_id  TEXT,               -- source record id for dedup on re-sync
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_special_dates_contact  ON special_dates(contact COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_special_dates_month_day ON special_dates(month, day);
+
+    CREATE INDEX IF NOT EXISTS idx_messages_date        ON messages(date);
+    CREATE INDEX IF NOT EXISTS idx_emails_date          ON emails(date);
+    CREATE INDEX IF NOT EXISTS idx_messages_contact     ON messages(contact COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_emails_contact       ON emails(contact COLLATE NOCASE);
     CREATE INDEX IF NOT EXISTS idx_calendar_events_date ON calendar_events(date);
     CREATE INDEX IF NOT EXISTS idx_gloss_contacts_prio  ON gloss_contacts(priority DESC);
+    CREATE INDEX IF NOT EXISTS idx_gloss_notes_contact  ON gloss_notes(contact COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_contact_aliases_canon ON contact_aliases(canonical COLLATE NOCASE);
   `);
 
   // Migrations for emails table
   const emailCols = db.pragma('table_info(emails)').map(c => c.name);
   if (!emailCols.includes('snippet'))        db.exec('ALTER TABLE emails ADD COLUMN snippet TEXT');
   if (!emailCols.includes('email_address'))  db.exec('ALTER TABLE emails ADD COLUMN email_address TEXT');
+  if (!emailCols.includes('thread_id'))      db.exec('ALTER TABLE emails ADD COLUMN thread_id TEXT');
+
+  // Migrations for address_book: link_id (Apple ZLINKID) + person_id FK.
+  const abCols = db.pragma('table_info(address_book)').map(c => c.name);
+  if (!abCols.includes('link_id'))   db.exec('ALTER TABLE address_book ADD COLUMN link_id TEXT');
+  if (!abCols.includes('person_id')) db.exec('ALTER TABLE address_book ADD COLUMN person_id INTEGER REFERENCES people(id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_address_book_person ON address_book(person_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_address_book_link   ON address_book(link_id)');
+
+  // Migration for gloss_contacts: person_id FK.
+  const gcCols = db.pragma('table_info(gloss_contacts)').map(c => c.name);
+  if (!gcCols.includes('person_id')) db.exec('ALTER TABLE gloss_contacts ADD COLUMN person_id INTEGER REFERENCES people(id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_gloss_contacts_person ON gloss_contacts(person_id)');
 
   return db;
 }
@@ -575,9 +774,9 @@ async function collect(date, { onProgress } = {}) {
       }
       for (const e of emails) {
         db.prepare(`
-          INSERT INTO emails (id, run_id, date, direction, contact, email_address, subject, snippet, account)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(crypto.randomUUID(), runId, date, e.direction, e.contact, e.emailAddress || null, e.subject || null, e.snippet || null, e.account || null);
+          INSERT INTO emails (id, run_id, date, direction, contact, email_address, subject, snippet, account, thread_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(crypto.randomUUID(), runId, date, e.direction, e.contact, e.emailAddress || null, e.subject || null, e.snippet || null, e.account || null, e.threadId || null);
       }
       db.prepare(`UPDATE runs SET status='done', messages_count=?, emails_count=? WHERE id=?`)
         .run(messages.length, emails.length, runId);
@@ -653,7 +852,7 @@ function getRunDetail(date) {
 
 function getGmailAccounts() {
   const db = openDb();
-  try { return db.prepare('SELECT id, email, added_at FROM gmail_accounts ORDER BY added_at').all(); }
+  try { return db.prepare('SELECT id, email, token_json, added_at FROM gmail_accounts ORDER BY added_at').all(); }
   finally { db.close(); }
 }
 
@@ -755,6 +954,34 @@ function hydrateGloss(row) {
   return { ...row, recent_context, aliases, linked_collections };
 }
 
+// ---------------------------------------------------------------------------
+// gloss_notes — notes about a contact pushed from Gloss
+// ---------------------------------------------------------------------------
+
+function upsertGlossNote(n) {
+  if (!n || !n.id || !n.contact || !n.date || !n.note) {
+    throw new Error('upsertGlossNote: id, contact, date, and note are required');
+  }
+  const db = openDb();
+  try {
+    db.prepare(`
+      INSERT INTO gloss_notes (id, contact, date, note, collection, gloss_url, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        contact    = excluded.contact,
+        date       = excluded.date,
+        note       = excluded.note,
+        collection = excluded.collection,
+        gloss_url  = excluded.gloss_url,
+        synced_at  = excluded.synced_at
+    `).run(
+      n.id, n.contact, n.date, n.note,
+      n.collection || null, n.gloss_url || null,
+      new Date().toISOString(),
+    );
+  } finally { db.close(); }
+}
+
 // Aggregated contact list: everyone we've ever messaged/emailed, plus any
 // gloss profile we have. Rows returned sorted by priority DESC, then last
 // contact date DESC. Each row: { contact, message_count, email_count,
@@ -763,7 +990,8 @@ function listContacts({ q = '', limit = 500 } = {}) {
   const db = openDb();
   try {
     const pattern = q ? `%${q}%` : null;
-    // Gather per-contact stats from messages + emails, unioned.
+    // Gather per-contact stats from messages + emails, unioned. Raw keys are
+    // name strings as stored in those tables; we roll them up to people below.
     const rows = db.prepare(`
       SELECT contact,
              SUM(msg) AS message_count,
@@ -790,21 +1018,85 @@ function listContacts({ q = '', limit = 500 } = {}) {
       ${pattern ? 'WHERE contact LIKE ? COLLATE NOCASE' : ''}
     `).all(...(pattern ? [pattern] : []));
 
-    const map = new Map();
-    for (const r of rows) {
-      map.set(r.contact.toLowerCase(), {
-        contact: r.contact,
-        message_count: r.message_count || 0,
-        email_count: r.email_count || 0,
-        last_contact_date: r.last_contact_date || null,
-      });
+    // Look up the person_id for every comms name in one shot, so we can roll
+    // multiple name variants up into a single row.
+    const nameToPerson = new Map();
+    if (rows.length || glossRows.length) {
+      const allNames = new Set([
+        ...rows.map(r => r.contact),
+        ...glossRows.map(g => g.contact),
+      ]);
+      const nameArr = [...allNames];
+      if (nameArr.length) {
+        const ph = nameArr.map(() => '?').join(',');
+        const hits = db.prepare(`
+          SELECT name, person_id FROM people_names WHERE name IN (${ph}) COLLATE NOCASE
+        `).all(...nameArr);
+        // A name might resolve to multiple people (rare — usually ambiguous
+        // given names). Prefer a unique match; otherwise treat as unresolved.
+        const byName = new Map();
+        for (const h of hits) {
+          if (!byName.has(h.name.toLowerCase())) byName.set(h.name.toLowerCase(), new Set());
+          byName.get(h.name.toLowerCase()).add(h.person_id);
+        }
+        for (const [n, set] of byName.entries()) {
+          if (set.size === 1) nameToPerson.set(n, [...set][0]);
+        }
+      }
     }
-    for (const g of glossRows) {
-      if (!map.has(g.contact.toLowerCase())) {
-        map.set(g.contact.toLowerCase(), {
-          contact: g.contact, message_count: 0, email_count: 0, last_contact_date: null,
+
+    // Keyed rollup: person_id if resolved, else 'name:<raw>' so unresolved
+    // comms names still surface under their own row.
+    const map = new Map();
+    const keyFor = rawName => {
+      const pid = nameToPerson.get(rawName.toLowerCase());
+      return pid ? `p:${pid}` : `name:${rawName.toLowerCase()}`;
+    };
+    const ensure = (key, seedContact) => {
+      if (!map.has(key)) {
+        map.set(key, {
+          contact: seedContact,
+          person_id: key.startsWith('p:') ? Number(key.slice(2)) : null,
+          message_count: 0,
+          email_count: 0,
+          last_contact_date: null,
+          ab_count: 0,
+          ab_sources: [],
         });
       }
+      return map.get(key);
+    };
+    for (const r of rows) {
+      const row = ensure(keyFor(r.contact), r.contact);
+      row.message_count += r.message_count || 0;
+      row.email_count   += r.email_count   || 0;
+      if (r.last_contact_date && (!row.last_contact_date || r.last_contact_date > row.last_contact_date)) {
+        row.last_contact_date = r.last_contact_date;
+      }
+    }
+    for (const g of glossRows) ensure(keyFor(g.contact), g.contact);
+
+    // Union in address-book-linked people (including those with zero comms so
+    // imported-only contacts now surface in the main list — this is the
+    // "fold AB into Contacts" change the UI relies on).
+    const abPeople = db.prepare(`
+      SELECT p.id AS person_id, p.display_name,
+             COUNT(ab.id) AS ab_count,
+             GROUP_CONCAT(DISTINCT ab.source) AS sources
+      FROM people p
+      LEFT JOIN address_book ab ON ab.person_id = p.id
+      ${pattern ? 'WHERE p.display_name LIKE ? COLLATE NOCASE' : ''}
+      GROUP BY p.id
+    `).all(...(pattern ? [pattern] : []));
+    for (const ap of abPeople) {
+      const key = `p:${ap.person_id}`;
+      const row = ensure(key, ap.display_name);
+      row.person_id = ap.person_id;
+      row.ab_count = ap.ab_count || 0;
+      row.ab_sources = ap.sources ? ap.sources.split(',') : [];
+      // If comms rolled this person up under a variant like "Abi", keep the
+      // canonical display_name from people for a cleaner list label.
+      if (ap.display_name) row.contact = ap.display_name;
     }
 
     // Attach gloss profiles (by contact name OR alias).
@@ -835,47 +1127,131 @@ function listContacts({ q = '', limit = 500 } = {}) {
 }
 
 // Full contact detail: stats, gloss profile, and last N messages/emails.
+//
+// Name variants: we resolve the input name to a person (when unambiguous) and
+// expand every name-keyed query to `contact IN (…all variants…)`. That's how
+// "Abigail Colestock" surfaces gloss notes written under "Abi" — without
+// rewriting message ingestion. If no person resolves (new contact, ambiguous
+// name), we fall back to the single-name query so nothing regresses.
 function getContactDetail(name, { recentLimit = 50 } = {}) {
   const db = openDb();
   try {
+    const person = _resolvePersonRaw(db, name);
+    const names = person ? person.names : [name];
+    // Ensure the requested name is always in the set even if it's case-shifted.
+    if (!names.some(n => n.toLowerCase() === name.toLowerCase())) names.push(name);
+    const ph = names.map(() => '?').join(',');
+    const nameArgs = names;
+
     const stats = db.prepare(`
       SELECT
-        (SELECT COUNT(*) FROM messages WHERE contact = ? COLLATE NOCASE) AS message_count,
-        (SELECT COUNT(*) FROM emails   WHERE contact = ? COLLATE NOCASE) AS email_count,
+        (SELECT COUNT(*) FROM messages WHERE contact IN (${ph}) COLLATE NOCASE) AS message_count,
+        (SELECT COUNT(*) FROM emails   WHERE contact IN (${ph}) COLLATE NOCASE) AS email_count,
         (SELECT MIN(date) FROM (
-           SELECT MIN(date) date FROM messages WHERE contact = ? COLLATE NOCASE
+           SELECT MIN(date) date FROM messages WHERE contact IN (${ph}) COLLATE NOCASE
            UNION ALL
-           SELECT MIN(date) date FROM emails   WHERE contact = ? COLLATE NOCASE
+           SELECT MIN(date) date FROM emails   WHERE contact IN (${ph}) COLLATE NOCASE
          )) AS first_contact_date,
         (SELECT MAX(date) FROM (
-           SELECT MAX(date) date FROM messages WHERE contact = ? COLLATE NOCASE
+           SELECT MAX(date) date FROM messages WHERE contact IN (${ph}) COLLATE NOCASE
            UNION ALL
-           SELECT MAX(date) date FROM emails   WHERE contact = ? COLLATE NOCASE
+           SELECT MAX(date) date FROM emails   WHERE contact IN (${ph}) COLLATE NOCASE
          )) AS last_contact_date
-    `).get(name, name, name, name, name, name);
+    `).get(...nameArgs, ...nameArgs, ...nameArgs, ...nameArgs, ...nameArgs, ...nameArgs);
 
     const messages = db.prepare(`
       SELECT id, date, direction, sender, text, sent_at, handle_id
-      FROM messages WHERE contact = ? COLLATE NOCASE
+      FROM messages WHERE contact IN (${ph}) COLLATE NOCASE
       ORDER BY sent_at DESC LIMIT ?
-    `).all(name, recentLimit);
+    `).all(...nameArgs, recentLimit);
 
     const emails = db.prepare(`
-      SELECT id, date, direction, contact, email_address, subject, snippet, account
-      FROM emails WHERE contact = ? COLLATE NOCASE
+      SELECT id, date, direction, contact, email_address, subject, snippet, account, thread_id
+      FROM emails WHERE contact IN (${ph}) COLLATE NOCASE
       ORDER BY rowid DESC LIMIT ?
-    `).all(name, recentLimit);
+    `).all(...nameArgs, recentLimit);
 
     const handles = new Set();
     for (const m of messages) if (m.handle_id) handles.add(m.handle_id);
-    const emailAddrs = new Set();
-    for (const e of emails) if (e.email_address) emailAddrs.add(e.email_address);
 
-    const gloss = getGlossContact(name);
-    const insight = db.prepare('SELECT insight, generated_at FROM contact_insights WHERE contact = ? COLLATE NOCASE').get(name);
+    // Pull ALL distinct addresses this contact has ever emailed from/to — the
+    // recent-N slice would miss older aliases, and calendar matching needs
+    // every address to find past meetings (e.g. personal gmail vs work domain).
+    const emailAddrs = new Set(
+      db.prepare(`SELECT DISTINCT email_address FROM emails WHERE contact IN (${ph}) COLLATE NOCASE AND email_address IS NOT NULL`)
+        .all(...nameArgs).map(r => r.email_address)
+    );
+
+    // Gloss profile: prefer the person's own gloss_contact row(s); fall back
+    // to name-based lookup for pre-link data.
+    let gloss = null;
+    if (person) {
+      const gr = db.prepare('SELECT * FROM gloss_contacts WHERE person_id = ?').get(person.person_id);
+      if (gr) gloss = hydrateGloss(gr);
+    }
+    if (!gloss) gloss = getGlossContact(name);
+
+    // Insight is still single-name-keyed; try each variant for a hit.
+    let insight = null;
+    for (const n of names) {
+      insight = db.prepare('SELECT insight, generated_at FROM contact_insights WHERE contact = ? COLLATE NOCASE').get(n);
+      if (insight) break;
+    }
+
+    // Calendar events where this contact appears as an attendee. Match by any
+    // known name variant OR any known email address for the contact.
+    const calLikes = names.map(n => `%${n.toLowerCase()}%`);
+    for (const addr of emailAddrs) {
+      if (addr) calLikes.push(`%${addr.toLowerCase()}%`);
+    }
+    const calWhere = calLikes.map(() => 'lower(attendees) LIKE ?').join(' OR ');
+    const calendarEvents = db.prepare(`
+      SELECT id, date, start_time, end_time, title, attendees, html_link
+      FROM calendar_events
+      WHERE ${calWhere}
+      ORDER BY date DESC, start_time DESC
+      LIMIT 30
+    `).all(...calLikes).map(hydrateEvent);
+
+    const glossNotes = db.prepare(`
+      SELECT id, date, note, collection, gloss_url
+      FROM gloss_notes
+      WHERE contact IN (${ph}) COLLATE NOCASE
+      ORDER BY date DESC
+      LIMIT 50
+    `).all(...nameArgs);
+
+    // Profile: try each variant, return the first hit.
+    let profile = null;
+    for (const n of names) {
+      profile = db.prepare(`
+        SELECT contact, relationship_type, personality_notes, practical_notes,
+               relationship_goals, followup_days, updated_at
+        FROM contact_profiles WHERE contact = ? COLLATE NOCASE
+      `).get(n);
+      if (profile) break;
+    }
+
+    // Special dates — birthdays, anniversaries, etc. Dedup by (type, month, day)
+    // because Apple + Google sync the same birthday twice (one row per source).
+    const rawSpecialDates = db.prepare(`
+      SELECT * FROM special_dates
+      WHERE contact IN (${ph}) COLLATE NOCASE
+      ORDER BY month, day
+    `).all(...nameArgs);
+    const specialDates = [];
+    const sdSeen = new Set();
+    for (const r of rawSpecialDates) {
+      const k = `${r.type}:${r.month}:${r.day}:${r.year || ''}`;
+      if (sdSeen.has(k)) continue;
+      sdSeen.add(k);
+      specialDates.push(r);
+    }
 
     return {
       contact: name,
+      person_id: person ? person.person_id : null,
+      name_variants: names,
       stats,
       handles: [...handles],
       emails_addrs: [...emailAddrs],
@@ -883,7 +1259,82 @@ function getContactDetail(name, { recentLimit = 50 } = {}) {
       insight: insight || null,
       messages,
       emails,
+      calendar_events: calendarEvents,
+      gloss_notes: glossNotes,
+      profile: profile || null,
+      special_dates: specialDates,
     };
+  } finally { db.close(); }
+}
+
+function _resolvePersonRaw(db, name) {
+  if (!name) return null;
+  const hits = db.prepare('SELECT person_id FROM people_names WHERE name = ? COLLATE NOCASE').all(name);
+  const unique = new Set(hits.map(h => h.person_id));
+  if (unique.size !== 1) return null;
+  const person_id = [...unique][0];
+  const names = db.prepare('SELECT DISTINCT name FROM people_names WHERE person_id = ?').all(person_id).map(r => r.name);
+  return { person_id, names };
+}
+
+// ---------------------------------------------------------------------------
+// contact_profiles — user-authored profile + followup cadence
+// ---------------------------------------------------------------------------
+
+function getContactProfile(name) {
+  const db = openDb();
+  try {
+    return db.prepare(`
+      SELECT contact, relationship_type, personality_notes, practical_notes,
+             relationship_goals, followup_days, updated_at
+      FROM contact_profiles WHERE contact = ? COLLATE NOCASE
+    `).get(name) || null;
+  } finally { db.close(); }
+}
+
+// Patch semantics: only keys present in `patch` are updated; missing keys
+// are untouched. Empty string clears a text field; null clears followup_days.
+function saveContactProfile(name, patch = {}) {
+  if (!name) throw new Error('saveContactProfile: name is required');
+  const db = openDb();
+  try {
+    const now = new Date().toISOString();
+    const existing = db.prepare('SELECT * FROM contact_profiles WHERE contact = ? COLLATE NOCASE').get(name);
+    const row = existing || { contact: name };
+    const textFields = ['relationship_type', 'personality_notes', 'practical_notes', 'relationship_goals'];
+    for (const k of textFields) {
+      if (k in patch) row[k] = (patch[k] === '' || patch[k] == null) ? null : String(patch[k]);
+    }
+    if ('followup_days' in patch) {
+      const v = patch.followup_days;
+      if (v === null || v === '' || v === undefined) row.followup_days = null;
+      else {
+        const n = Number(v);
+        row.followup_days = (Number.isFinite(n) && n > 0) ? Math.round(n) : null;
+      }
+    }
+    db.prepare(`
+      INSERT INTO contact_profiles
+        (contact, relationship_type, personality_notes, practical_notes,
+         relationship_goals, followup_days, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(contact) DO UPDATE SET
+        relationship_type  = excluded.relationship_type,
+        personality_notes  = excluded.personality_notes,
+        practical_notes    = excluded.practical_notes,
+        relationship_goals = excluded.relationship_goals,
+        followup_days      = excluded.followup_days,
+        updated_at         = excluded.updated_at
+    `).run(
+      name,
+      row.relationship_type ?? null,
+      row.personality_notes ?? null,
+      row.practical_notes ?? null,
+      row.relationship_goals ?? null,
+      row.followup_days ?? null,
+      now,
+    );
+    return getContactProfile(name);
   } finally { db.close(); }
 }
 
@@ -1034,42 +1485,69 @@ function getNudges() {
   const db = openDb();
   try {
     const week = isoWeekOf();
-    const rows = db.prepare(`
+    const glossRows = db.prepare(`
       SELECT * FROM gloss_contacts WHERE priority > 0 ORDER BY priority DESC
     `).all().map(hydrateGloss);
+    const profileRows = db.prepare(`
+      SELECT contact, relationship_type, followup_days
+      FROM contact_profiles WHERE followup_days IS NOT NULL AND followup_days > 0
+    `).all();
 
     const dismissed = new Set(
       db.prepare('SELECT contact FROM nudge_dismissals WHERE week = ?').all(week).map(r => r.contact.toLowerCase())
     );
 
     const today = new Date();
+    const seen = new Set(); // lowercased canonical — one nudge per person even if both sources match
     const out = [];
-    for (const g of rows) {
-      if (dismissed.has(g.contact.toLowerCase())) continue;
 
-      // Most recent comms: check name + all aliases
-      const names = [g.contact, ...(g.aliases || [])];
+    const lastContactFor = (names) => {
       const placeholders = names.map(() => '? COLLATE NOCASE').join(',');
-      const lastDate = db.prepare(`
+      return db.prepare(`
         SELECT MAX(date) d FROM (
           SELECT MAX(date) date FROM messages WHERE contact IN (${placeholders})
           UNION ALL
           SELECT MAX(date) date FROM emails   WHERE contact IN (${placeholders})
         )
       `).get(...names, ...names)?.d || null;
+    };
+    const daysSinceOf = (lastDate) => {
+      if (!lastDate) return 999;
+      return Math.floor((today - new Date(lastDate + 'T12:00:00')) / 86400000);
+    };
 
-      let daysSince;
-      if (lastDate) {
-        daysSince = Math.floor((today - new Date(lastDate + 'T12:00:00')) / 86400000);
-      } else {
-        daysSince = 999; // never contacted via comms → always nudge
-      }
+    // Profile-driven nudges take precedence — the user set an explicit cadence.
+    for (const p of profileRows) {
+      const key = p.contact.toLowerCase();
+      if (dismissed.has(key) || seen.has(key)) continue;
+      const lastDate = lastContactFor([p.contact]);
+      const daysSince = daysSinceOf(lastDate);
+      if (daysSince < p.followup_days) continue;
+      seen.add(key);
+      out.push({
+        contact: p.contact,
+        source: 'profile',
+        followup_days: p.followup_days,
+        relationship_type: p.relationship_type || null,
+        days_since_contact: daysSince,
+        last_contact_date: lastDate,
+      });
+    }
 
+    // Gloss-priority nudges fill in for people the user hasn't explicitly
+    // scheduled but who are tagged priority>=1 in the notebook.
+    for (const g of glossRows) {
+      const key = g.contact.toLowerCase();
+      if (dismissed.has(key) || seen.has(key)) continue;
+      const names = [g.contact, ...(g.aliases || [])];
+      const lastDate = lastContactFor(names);
+      const daysSince = daysSinceOf(lastDate);
       const threshold = g.priority >= 3 ? 7 : 14;
       if (daysSince < threshold) continue;
-
+      seen.add(key);
       out.push({
         contact: g.contact,
+        source: 'gloss',
         priority: g.priority,
         days_since_contact: daysSince,
         last_contact_date: lastDate,
@@ -1087,6 +1565,1223 @@ function dismissNudge(contact) {
     db.prepare(`
       INSERT OR IGNORE INTO nudge_dismissals (contact, week) VALUES (?, ?)
     `).run(contact, isoWeekOf());
+  } finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// agenda_items — person- and event-scoped reminders the user leaves for
+// themselves. Read by the meeting-prep synthesizer; never AI-generated.
+// ---------------------------------------------------------------------------
+
+function listAgendaItems(scopeType, scopeId, { includeDone = true } = {}) {
+  if (!scopeType || !scopeId) throw new Error('listAgendaItems: scope required');
+  const db = openDb();
+  try {
+    const where = includeDone ? '' : 'AND done_at IS NULL';
+    return db.prepare(`
+      SELECT id, scope_type, scope_id, content, done_at, created_at, updated_at, sort_index
+      FROM agenda_items
+      WHERE scope_type = ? AND scope_id = ? COLLATE NOCASE ${where}
+      ORDER BY done_at IS NOT NULL, sort_index, created_at
+    `).all(scopeType, scopeId);
+  } finally { db.close(); }
+}
+
+function addAgendaItem(scopeType, scopeId, content) {
+  if (!scopeType || !scopeId) throw new Error('addAgendaItem: scope required');
+  if (!content || !String(content).trim()) throw new Error('addAgendaItem: content required');
+  const db = openDb();
+  try {
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+    const maxIdx = db.prepare('SELECT COALESCE(MAX(sort_index), 0) mx FROM agenda_items WHERE scope_type = ? AND scope_id = ? COLLATE NOCASE').get(scopeType, scopeId)?.mx ?? 0;
+    db.prepare(`
+      INSERT INTO agenda_items (id, scope_type, scope_id, content, done_at, created_at, updated_at, sort_index)
+      VALUES (?, ?, ?, ?, NULL, ?, ?, ?)
+    `).run(id, scopeType, scopeId, String(content).trim(), now, now, maxIdx + 1);
+    return db.prepare('SELECT * FROM agenda_items WHERE id = ?').get(id);
+  } finally { db.close(); }
+}
+
+function updateAgendaItem(id, patch = {}) {
+  const db = openDb();
+  try {
+    const row = db.prepare('SELECT * FROM agenda_items WHERE id = ?').get(id);
+    if (!row) throw new Error('agenda item not found');
+    const now = new Date().toISOString();
+    if ('content' in patch) row.content = String(patch.content).trim();
+    if ('done' in patch) row.done_at = patch.done ? (row.done_at || now) : null;
+    if ('sort_index' in patch) row.sort_index = Number(patch.sort_index) || 0;
+    db.prepare(`UPDATE agenda_items SET content = ?, done_at = ?, sort_index = ?, updated_at = ? WHERE id = ?`)
+      .run(row.content, row.done_at, row.sort_index, now, id);
+    return db.prepare('SELECT * FROM agenda_items WHERE id = ?').get(id);
+  } finally { db.close(); }
+}
+
+function deleteAgendaItem(id) {
+  const db = openDb();
+  try { db.prepare('DELETE FROM agenda_items WHERE id = ?').run(id); }
+  finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// Custom playbook models — user-defined conversation frameworks that extend
+// the built-in catalog in ai.js. Key format: lowercase slug.
+// ---------------------------------------------------------------------------
+
+function listCustomPlaybookModels() {
+  const db = openDb();
+  try {
+    return db.prepare('SELECT key, label, blurb, created_at, updated_at FROM playbook_models ORDER BY label').all();
+  } finally { db.close(); }
+}
+
+function getCustomPlaybookModel(key) {
+  if (!key) return null;
+  const db = openDb();
+  try {
+    return db.prepare('SELECT key, label, blurb, created_at, updated_at FROM playbook_models WHERE key = ?').get(key) || null;
+  } finally { db.close(); }
+}
+
+function saveCustomPlaybookModel({ key, label, blurb, originalKey }) {
+  const k = String(key || '').trim().toLowerCase();
+  const l = String(label || '').trim();
+  const b = String(blurb || '').trim();
+  if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(k)) {
+    throw new Error('key must be a lowercase slug (letters, digits, dashes), 2-64 chars');
+  }
+  if (!l) throw new Error('label is required');
+  if (!b) throw new Error('blurb is required');
+
+  const db = openDb();
+  const now = new Date().toISOString();
+  try {
+    const renaming = originalKey && originalKey !== k;
+    if (renaming) {
+      const exists = db.prepare('SELECT key FROM playbook_models WHERE key = ?').get(k);
+      if (exists) throw new Error(`key "${k}" already exists`);
+      db.prepare('UPDATE playbook_models SET key = ?, label = ?, blurb = ?, updated_at = ? WHERE key = ?')
+        .run(k, l, b, now, originalKey);
+    } else {
+      db.prepare(`
+        INSERT INTO playbook_models (key, label, blurb, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET label = excluded.label, blurb = excluded.blurb, updated_at = excluded.updated_at
+      `).run(k, l, b, now, now);
+    }
+    return db.prepare('SELECT key, label, blurb, created_at, updated_at FROM playbook_models WHERE key = ?').get(k);
+  } finally { db.close(); }
+}
+
+function deleteCustomPlaybookModel(key) {
+  const db = openDb();
+  try { db.prepare('DELETE FROM playbook_models WHERE key = ?').run(key); }
+  finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// Address book — imported contacts from Apple Contacts + Google Contacts.
+// Identifiers (emails / phones) get their own table for fast reverse-lookup.
+// Phone normalization uses the same `normalizePhone` rule as iMessage
+// ingestion (US country code dropped, bare digits) so lookups join cleanly.
+// ---------------------------------------------------------------------------
+
+function _normalizeEmailForIndex(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim().toLowerCase();
+  return s && s.includes('@') ? s : null;
+}
+
+function _normalizePhoneForIndex(raw) {
+  return normalizePhone(raw);
+}
+
+function upsertAddressBookContact(rec) {
+  if (!rec || !rec.source || !rec.source_account || !rec.source_id) {
+    throw new Error('upsertAddressBookContact: source, source_account, source_id required');
+  }
+  const id = `${rec.source}:${rec.source_account}:${rec.source_id}`;
+  const now = new Date().toISOString();
+
+  const emails = Array.isArray(rec.emails) ? rec.emails : [];
+  const phones = Array.isArray(rec.phones) ? rec.phones : [];
+
+  const displayName = (rec.display_name ||
+    [rec.given_name, rec.family_name].filter(Boolean).join(' ') ||
+    rec.nickname || rec.organization || emails[0]?.value || phones[0]?.value || '(unnamed)').trim();
+
+  const db = openDb();
+  try {
+    const txn = db.transaction(() => {
+      const existing = db.prepare('SELECT id FROM address_book WHERE id = ?').get(id);
+      if (existing) {
+        db.prepare(`
+          UPDATE address_book SET
+            display_name=?, given_name=?, family_name=?, nickname=?,
+            organization=?, job_title=?, emails_json=?, phones_json=?,
+            photo_url=?, notes=?, source_modified_at=?, link_id=?, updated_at=?
+          WHERE id = ?
+        `).run(
+          displayName, rec.given_name || null, rec.family_name || null, rec.nickname || null,
+          rec.organization || null, rec.job_title || null,
+          JSON.stringify(emails), JSON.stringify(phones),
+          rec.photo_url || null, rec.notes || null,
+          rec.source_modified_at || null, rec.link_id || null, now, id
+        );
+      } else {
+        db.prepare(`
+          INSERT INTO address_book
+            (id, source, source_account, source_id, display_name, given_name, family_name,
+             nickname, organization, job_title, emails_json, phones_json, photo_url, notes,
+             source_modified_at, link_id, imported_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          id, rec.source, rec.source_account, rec.source_id, displayName,
+          rec.given_name || null, rec.family_name || null, rec.nickname || null,
+          rec.organization || null, rec.job_title || null,
+          JSON.stringify(emails), JSON.stringify(phones),
+          rec.photo_url || null, rec.notes || null,
+          rec.source_modified_at || null, rec.link_id || null, now, now
+        );
+      }
+
+      db.prepare('DELETE FROM address_book_identifiers WHERE address_book_id = ?').run(id);
+      const ins = db.prepare('INSERT OR IGNORE INTO address_book_identifiers (address_book_id, kind, value, label) VALUES (?, ?, ?, ?)');
+      for (const e of emails) {
+        const v = _normalizeEmailForIndex(e.value);
+        if (v) ins.run(id, 'email', v, e.label || null);
+      }
+      for (const p of phones) {
+        const v = _normalizePhoneForIndex(p.value);
+        if (v) ins.run(id, 'phone', v, p.label || null);
+      }
+    });
+    txn();
+    return id;
+  } finally { db.close(); }
+}
+
+// Remove rows for a given (source, account) that weren't seen in the latest
+// sync. Caller passes the set of source_ids present upstream.
+function pruneAddressBookAccount(source, source_account, keepSourceIds) {
+  const db = openDb();
+  const keep = new Set(keepSourceIds || []);
+  try {
+    const rows = db.prepare('SELECT id, source_id FROM address_book WHERE source = ? AND source_account = ?')
+      .all(source, source_account);
+    let removed = 0;
+    const txn = db.transaction(() => {
+      for (const r of rows) {
+        if (!keep.has(r.source_id)) {
+          db.prepare('DELETE FROM address_book_identifiers WHERE address_book_id = ?').run(r.id);
+          db.prepare('DELETE FROM address_book WHERE id = ?').run(r.id);
+          removed++;
+        }
+      }
+    });
+    txn();
+    return removed;
+  } finally { db.close(); }
+}
+
+function recordAddressBookSync({ source, source_account, total = 0, upserted = 0, removed = 0, error = null }) {
+  const db = openDb();
+  try {
+    db.prepare(`
+      INSERT INTO address_book_sync_log (source, source_account, ran_at, total, upserted, removed, error)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(source, source_account, new Date().toISOString(), total, upserted, removed, error);
+  } finally { db.close(); }
+}
+
+function listAddressBook({ q = '', source = null, limit = 500, offset = 0 } = {}) {
+  const db = openDb();
+  try {
+    const where = [];
+    const args = [];
+    if (source) { where.push('source = ?'); args.push(source); }
+    if (q) {
+      const like = `%${q.toLowerCase()}%`;
+      where.push(`(
+        lower(display_name) LIKE ? OR
+        lower(organization) LIKE ? OR
+        lower(emails_json) LIKE ? OR
+        lower(phones_json) LIKE ?
+      )`);
+      args.push(like, like, like, like);
+    }
+    const sql = `
+      SELECT id, source, source_account, source_id, display_name, given_name, family_name,
+             nickname, organization, job_title, emails_json, phones_json, photo_url, updated_at
+      FROM address_book
+      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+      ORDER BY display_name COLLATE NOCASE ASC
+      LIMIT ? OFFSET ?
+    `;
+    args.push(limit, offset);
+    return db.prepare(sql).all(...args).map(r => ({
+      ...r,
+      emails: JSON.parse(r.emails_json || '[]'),
+      phones: JSON.parse(r.phones_json || '[]'),
+    }));
+  } finally { db.close(); }
+}
+
+function getAddressBookContact(id) {
+  const db = openDb();
+  try {
+    const r = db.prepare('SELECT * FROM address_book WHERE id = ?').get(id);
+    if (!r) return null;
+    return {
+      ...r,
+      emails: JSON.parse(r.emails_json || '[]'),
+      phones: JSON.parse(r.phones_json || '[]'),
+    };
+  } finally { db.close(); }
+}
+
+// Find address-book rows that match any of the given emails/phones. Returns
+// a deduped array of rows. Used to enrich contact detail views.
+//
+// Two sources of noise we filter out:
+//   1. Shared identifiers (group addresses like `pastors@…`, or a family
+//      landline) match every member — skip values resolving to more than
+//      `maxFanout` distinct entries; those are roles, not personal ids.
+//   2. The caller's `phones` list often contains group-chat participants'
+//      handles (Comms aggregates by display name, so being on a group
+//      thread leaks others' numbers into the contact's handle list). When
+//      `contactName` is provided, we require each matched address-book
+//      row to share a name token with it — unless the identifier is a
+//      unique hit (fanout=1), which is strong enough evidence on its own.
+function findAddressBookByIdentifiers({ emails = [], phones = [], contactName = null, maxFanout = 3 } = {}) {
+  const cleanEmails = [...new Set(emails.map(_normalizeEmailForIndex).filter(Boolean))];
+  const cleanPhones = [...new Set(phones.map(_normalizePhoneForIndex).filter(Boolean))];
+  if (!cleanEmails.length && !cleanPhones.length) return [];
+  const nameTokens = _nameTokens(contactName);
+  const requireNameMatch = nameTokens.size > 0;
+
+  const db = openDb();
+  try {
+    // candidate id -> true if any matching identifier was unique (fanout=1)
+    const candidates = new Map();
+    const addNonShared = (kind, values) => {
+      if (!values.length) return;
+      const sql = `
+        SELECT address_book_id, value FROM address_book_identifiers
+        WHERE kind = ? AND value IN (${values.map(() => '?').join(',')})
+      `;
+      const rows = db.prepare(sql).all(kind, ...values);
+      const byValue = new Map();
+      for (const r of rows) {
+        if (!byValue.has(r.value)) byValue.set(r.value, new Set());
+        byValue.get(r.value).add(r.address_book_id);
+      }
+      for (const [, set] of byValue) {
+        if (set.size > maxFanout) continue; // group address — skip
+        const unique = set.size === 1;
+        for (const id of set) {
+          if (!candidates.has(id)) candidates.set(id, false);
+          if (unique) candidates.set(id, true);
+        }
+      }
+    };
+    addNonShared('email', cleanEmails);
+    addNonShared('phone', cleanPhones);
+    if (!candidates.size) return [];
+
+    const sql = `SELECT * FROM address_book WHERE id IN (${[...candidates.keys()].map(() => '?').join(',')})`;
+    const rows = db.prepare(sql).all(...candidates.keys()).map(r => ({
+      ...r,
+      emails: JSON.parse(r.emails_json || '[]'),
+      phones: JSON.parse(r.phones_json || '[]'),
+    }));
+    if (!requireNameMatch) return rows;
+    return rows.filter(r => {
+      if (candidates.get(r.id)) return true; // unique-identifier hit: trust it
+      const rowTokens = _nameTokens([r.display_name, r.given_name, r.family_name, r.nickname].filter(Boolean).join(' '));
+      for (const t of rowTokens) if (nameTokens.has(t)) return true;
+      return false;
+    });
+  } finally { db.close(); }
+}
+
+function _nameTokens(s) {
+  const out = new Set();
+  if (!s) return out;
+  for (const t of String(s).toLowerCase().split(/[^a-z0-9]+/)) {
+    if (t && t.length >= 2) out.add(t);
+  }
+  return out;
+}
+
+function addressBookStats() {
+  const db = openDb();
+  try {
+    const counts = db.prepare(`
+      SELECT source, source_account, COUNT(*) AS n FROM address_book
+      GROUP BY source, source_account ORDER BY source, source_account
+    `).all();
+    const lastSync = db.prepare(`
+      SELECT source, source_account, MAX(ran_at) AS ran_at, error, total, upserted, removed
+      FROM address_book_sync_log
+      GROUP BY source, source_account
+    `).all();
+    const lastMap = new Map(lastSync.map(r => [`${r.source}:${r.source_account}`, r]));
+    const total = db.prepare('SELECT COUNT(*) n FROM address_book').get().n;
+    return {
+      total,
+      accounts: counts.map(c => ({
+        ...c,
+        last_sync: lastMap.get(`${c.source}:${c.source_account}`) || null,
+      })),
+    };
+  } finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// people — canonical identity registry.
+//
+// rebuildPeople() clusters address_book rows into real humans using:
+//   1. Apple ZLINKID (same person across Apple sources)
+//   2. Shared normalized identifier (email or phone)
+//   3. Exact (given+family) name match as a last resort
+// Then it attaches gloss_contacts by name/alias.
+//
+// It's a full rebuild — fast (a few thousand rows) and side-effect-clean.
+// merge_lock=1 rows are preserved as-is so manual merges survive rebuilds.
+// ---------------------------------------------------------------------------
+
+function rebuildPeople() {
+  const db = openDb();
+  try {
+    db.pragma('foreign_keys = ON');
+    db.transaction(() => {
+      // Preserve locked people and their names. Everything else gets rebuilt.
+      const lockedIds = db.prepare('SELECT id FROM people WHERE merge_lock = 1').all().map(r => r.id);
+      if (lockedIds.length) {
+        const ph = lockedIds.map(() => '?').join(',');
+        db.prepare(`DELETE FROM people_names WHERE person_id NOT IN (${ph})`).run(...lockedIds);
+        db.prepare(`DELETE FROM people       WHERE id        NOT IN (${ph})`).run(...lockedIds);
+        db.prepare(`UPDATE address_book   SET person_id = NULL WHERE person_id NOT IN (${ph})`).run(...lockedIds);
+        db.prepare(`UPDATE gloss_contacts  SET person_id = NULL WHERE person_id NOT IN (${ph})`).run(...lockedIds);
+      } else {
+        db.exec(`
+          DELETE FROM people_names;
+          DELETE FROM people;
+          UPDATE address_book  SET person_id = NULL;
+          UPDATE gloss_contacts SET person_id = NULL;
+        `);
+      }
+
+      // --- 1. Cluster address_book rows via union-find ------------------------
+      const abRows = db.prepare(`
+        SELECT id, display_name, given_name, family_name, nickname, link_id, source_modified_at, updated_at
+        FROM address_book
+        WHERE person_id IS NULL
+      `).all();
+      const idents = db.prepare(`
+        SELECT address_book_id, kind, value FROM address_book_identifiers
+      `).all();
+      const identsById = new Map();
+      for (const i of idents) {
+        if (!identsById.has(i.address_book_id)) identsById.set(i.address_book_id, []);
+        identsById.get(i.address_book_id).push({ kind: i.kind, value: i.value });
+      }
+
+      const parent = new Map();
+      const find = (x) => {
+        while (parent.get(x) !== x) {
+          parent.set(x, parent.get(parent.get(x)));
+          x = parent.get(x);
+        }
+        return x;
+      };
+      const union = (a, b) => {
+        const ra = find(a), rb = find(b);
+        if (ra !== rb) parent.set(ra, rb);
+      };
+
+      for (const r of abRows) parent.set(r.id, r.id);
+
+      // Union via ZLINKID (strongest signal — Apple already decided).
+      const byLink = new Map();
+      for (const r of abRows) {
+        if (!r.link_id) continue;
+        if (!byLink.has(r.link_id)) byLink.set(r.link_id, []);
+        byLink.get(r.link_id).push(r.id);
+      }
+      for (const ids of byLink.values()) {
+        for (let i = 1; i < ids.length; i++) union(ids[0], ids[i]);
+      }
+
+      // Union via shared identifier (email or phone). We skip shared/role
+      // addresses — any identifier value that spans > this many ab rows is
+      // treated as a group address (same filter as findAddressBookByIdentifiers).
+      const MAX_IDENT_FANOUT = 3;
+      const byIdent = new Map();
+      for (const i of idents) {
+        const k = `${i.kind}:${i.value}`;
+        if (!byIdent.has(k)) byIdent.set(k, new Set());
+        byIdent.get(k).add(i.address_book_id);
+      }
+      for (const [, set] of byIdent) {
+        if (set.size < 2 || set.size > MAX_IDENT_FANOUT) continue;
+        const arr = [...set];
+        for (let i = 1; i < arr.length; i++) union(arr[0], arr[i]);
+      }
+
+      // Union via exact (given+family) name as last resort. Only links when
+      // both given and family are present — "Smith" alone is too ambiguous.
+      const byName = new Map();
+      for (const r of abRows) {
+        if (!r.given_name || !r.family_name) continue;
+        const k = (r.given_name + ' ' + r.family_name).toLowerCase().trim();
+        if (!byName.has(k)) byName.set(k, []);
+        byName.get(k).push(r.id);
+      }
+      for (const ids of byName.values()) {
+        if (ids.length < 2) continue;
+        for (let i = 1; i < ids.length; i++) union(ids[0], ids[i]);
+      }
+
+      // --- 2. Create a people row per cluster, pick best canonical -----------
+      const clusters = new Map(); // root -> [abRow…]
+      for (const r of abRows) {
+        const root = find(r.id);
+        if (!clusters.has(root)) clusters.set(root, []);
+        clusters.get(root).push(r);
+      }
+
+      const now = new Date().toISOString();
+      const insPerson = db.prepare(`
+        INSERT INTO people (display_name, given_name, family_name, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      const insName = db.prepare(`
+        INSERT OR IGNORE INTO people_names (person_id, name, source) VALUES (?, ?, ?)
+      `);
+      const setAbPerson = db.prepare('UPDATE address_book SET person_id = ? WHERE id = ?');
+
+      for (const members of clusters.values()) {
+        // Choose the canonical card: most recently modified, with the longest
+        // display_name breaks ties (so "Abigail Colestock" beats "Abi").
+        members.sort((a, b) => {
+          const ma = a.source_modified_at || a.updated_at || '';
+          const mb = b.source_modified_at || b.updated_at || '';
+          if (mb !== ma) return mb.localeCompare(ma);
+          return (b.display_name || '').length - (a.display_name || '').length;
+        });
+        const best = members[0];
+        const result = insPerson.run(
+          best.display_name || [best.given_name, best.family_name].filter(Boolean).join(' ') || '(unnamed)',
+          best.given_name || null,
+          best.family_name || null,
+          now, now,
+        );
+        const personId = result.lastInsertRowid;
+        const nameSet = new Set();
+        for (const m of members) {
+          setAbPerson.run(personId, m.id);
+          for (const n of [m.display_name, m.given_name, m.family_name, m.nickname]) {
+            if (!n) continue;
+            const key = String(n).trim().toLowerCase();
+            if (!key || nameSet.has(key)) continue;
+            nameSet.add(key);
+            insName.run(personId, n.trim(), 'address_book');
+          }
+        }
+      }
+
+      // --- 3. Link gloss_contacts by name or alias ---------------------------
+      const glossRows = db.prepare('SELECT contact, aliases, person_id FROM gloss_contacts').all();
+      const findPersonByName = db.prepare(`
+        SELECT person_id FROM people_names WHERE name = ? COLLATE NOCASE LIMIT 2
+      `);
+      const setGlossPerson = db.prepare('UPDATE gloss_contacts SET person_id = ? WHERE contact = ? COLLATE NOCASE');
+      for (const g of glossRows) {
+        if (g.person_id) continue; // already linked (e.g., merge_lock preserved)
+        const candidates = [g.contact];
+        try {
+          const parsed = g.aliases ? JSON.parse(g.aliases) : [];
+          if (Array.isArray(parsed)) for (const a of parsed) if (a) candidates.push(a);
+        } catch { /* ignore bad JSON */ }
+
+        let personId = null;
+        for (const n of candidates) {
+          const hits = findPersonByName.all(n);
+          if (hits.length === 1) { personId = hits[0].person_id; break; }
+          // length 0: keep trying; length 2+: ambiguous, skip
+        }
+
+        if (!personId) {
+          // No match — create a gloss-only person so queries can still resolve
+          // "Abi Colestock" even if she isn't in any address book.
+          const result = insPerson.run(g.contact, null, null, now, now);
+          personId = result.lastInsertRowid;
+        }
+        setGlossPerson.run(personId, g.contact);
+        insName.run(personId, g.contact, 'gloss');
+        try {
+          const parsed = g.aliases ? JSON.parse(g.aliases) : [];
+          if (Array.isArray(parsed)) for (const a of parsed) if (a) insName.run(personId, a, 'gloss_alias');
+        } catch { /* ignore */ }
+      }
+
+      // --- 4. Seed contact_aliases-derived names too -------------------------
+      const aliasPairs = db.prepare('SELECT alias, canonical FROM contact_aliases').all();
+      for (const { alias, canonical } of aliasPairs) {
+        const rows = findPersonByName.all(canonical);
+        if (rows.length !== 1) continue;
+        insName.run(rows[0].person_id, alias, 'contact_alias');
+      }
+    })();
+    const count = db.prepare('SELECT COUNT(*) n FROM people').get().n;
+    return { ok: true, people: count };
+  } finally { db.close(); }
+}
+
+// Resolve a free-text name to a person. Returns { person_id, names[] } if
+// unambiguous, or null. The names array is the expanded query set callers
+// should use in `contact IN (…)` filters.
+function resolvePerson(name) {
+  if (!name) return null;
+  const db = openDb();
+  try {
+    const hits = db.prepare(`
+      SELECT person_id FROM people_names WHERE name = ? COLLATE NOCASE
+    `).all(name);
+    const unique = new Set(hits.map(h => h.person_id));
+    if (unique.size !== 1) return null;
+    const person_id = [...unique][0];
+    const names = db.prepare(`
+      SELECT DISTINCT name FROM people_names WHERE person_id = ?
+    `).all(person_id).map(r => r.name);
+    return { person_id, names };
+  } finally { db.close(); }
+}
+
+function getPerson(person_id) {
+  const db = openDb();
+  try {
+    const p = db.prepare('SELECT * FROM people WHERE id = ?').get(person_id);
+    if (!p) return null;
+    const names = db.prepare('SELECT name, source FROM people_names WHERE person_id = ? ORDER BY name COLLATE NOCASE').all(person_id);
+    const address_book = db.prepare(`
+      SELECT id, source, source_account, display_name, organization, job_title, emails_json, phones_json
+      FROM address_book WHERE person_id = ?
+    `).all(person_id).map(r => ({
+      ...r,
+      emails: JSON.parse(r.emails_json || '[]'),
+      phones: JSON.parse(r.phones_json || '[]'),
+    }));
+    const gloss = db.prepare(`
+      SELECT contact, aliases, gloss_url, priority, mention_count, last_mentioned_at
+      FROM gloss_contacts WHERE person_id = ?
+    `).all(person_id);
+    return { ...p, names, address_book, gloss };
+  } finally { db.close(); }
+}
+
+// Merge a set of people into target_id. Names + linked rows (address_book,
+// gloss_contacts) are reassigned; merged people rows are deleted; target is
+// marked merge_lock=1 so a later automatic rebuild won't undo the merge.
+function mergePeople(target_id, other_ids) {
+  if (!target_id) throw new Error('mergePeople: target_id required');
+  const others = (other_ids || []).filter(id => id && id !== target_id);
+  if (!others.length) return { ok: true, moved: 0 };
+  const db = openDb();
+  try {
+    const placeholders = others.map(() => '?').join(',');
+    const txn = db.transaction(() => {
+      db.prepare(`UPDATE address_book   SET person_id = ? WHERE person_id IN (${placeholders})`).run(target_id, ...others);
+      db.prepare(`UPDATE gloss_contacts SET person_id = ? WHERE person_id IN (${placeholders})`).run(target_id, ...others);
+      db.prepare(`UPDATE OR IGNORE people_names SET person_id = ? WHERE person_id IN (${placeholders})`).run(target_id, ...others);
+      db.prepare(`DELETE FROM people_names WHERE person_id IN (${placeholders})`).run(...others);
+      db.prepare(`DELETE FROM people      WHERE id        IN (${placeholders})`).run(...others);
+      db.prepare(`UPDATE people SET merge_lock = 1, updated_at = ? WHERE id = ?`).run(new Date().toISOString(), target_id);
+      // Clear any rejected_merges rows involving the merged ids — they'd be
+      // dangling FKs, and the user's verdict has clearly flipped.
+      db.prepare(`DELETE FROM rejected_merges WHERE person_a IN (${placeholders}) OR person_b IN (${placeholders})`).run(...others, ...others);
+    });
+    txn();
+    return { ok: true, moved: others.length };
+  } finally { db.close(); }
+}
+
+// Dismiss a suggested pair so the detector stops surfacing it.
+function rejectMergePair(a_id, b_id) {
+  const a = Math.min(Number(a_id), Number(b_id));
+  const b = Math.max(Number(a_id), Number(b_id));
+  if (!a || !b || a === b) throw new Error('rejectMergePair: two distinct person ids required');
+  const db = openDb();
+  try {
+    db.prepare(`
+      INSERT INTO rejected_merges (person_a, person_b, rejected_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(person_a, person_b) DO UPDATE SET rejected_at = excluded.rejected_at
+    `).run(a, b, new Date().toISOString());
+    return { ok: true };
+  } finally { db.close(); }
+}
+
+// Find likely-duplicate person pairs that rebuildPeople didn't auto-cluster.
+// Strategies are unioned; each pair accumulates signals so pairs with more
+// signals rank higher. Already-rejected pairs are dropped.
+//
+// Signals:
+//   • surname + first-initial match (catches nickname/full-name pairs like
+//     Abi ↔ Abigail Colestock when no shared phone/email was present)
+//   • one person's display_name equals another's nickname-derived given_name
+//   • exact display_name match across two people (rare after rebuildPeople
+//     but happens when names are identical and identifiers were too fanned
+//     out to cluster).
+//
+// Returns [{ a: {id,display_name,...}, b: {...}, signals: ['surname+initial', ...] }].
+function findDuplicateCandidates({ limit = 50 } = {}) {
+  const db = openDb();
+  try {
+    const pairScores = new Map(); // key 'a:b' (a<b) → { signals: Set }
+
+    const addPair = (x, y, signal) => {
+      const [a, b] = x < y ? [x, y] : [y, x];
+      if (a === b) return;
+      const key = `${a}:${b}`;
+      if (!pairScores.has(key)) pairScores.set(key, { a, b, signals: new Set() });
+      pairScores.get(key).signals.add(signal);
+    };
+
+    // Signal 1: shared normalized (family, first-letter-of-given).
+    // Only consider when both names are present and at least one of the given
+    // names is shorter than 4 chars — that's the nickname case we care about.
+    // We normalize by lowercasing + stripping non-alpha so "McLaughlin" and
+    // "mclaughlin" match.
+    const norm = s => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+    const rows = db.prepare(`
+      SELECT id, display_name, given_name, family_name
+      FROM people
+      WHERE given_name IS NOT NULL AND family_name IS NOT NULL
+    `).all();
+    const byKey = new Map();
+    for (const r of rows) {
+      const gn = norm(r.given_name);
+      const fn = norm(r.family_name);
+      if (!gn || !fn) continue;
+      const key = `${fn}|${gn[0]}`;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push({ ...r, _gn: gn });
+    }
+    for (const bucket of byKey.values()) {
+      if (bucket.length < 2) continue;
+      for (let i = 0; i < bucket.length; i++) {
+        for (let j = i + 1; j < bucket.length; j++) {
+          const a = bucket[i], b = bucket[j];
+          // Require that the given names differ (otherwise rebuildPeople
+          // would have clustered by "given+family" already) AND that one
+          // looks like a short-form of the other — either a length gap or
+          // a prefix match. This screens out unrelated "John S." ↔ "Jane S."
+          if (a._gn === b._gn) continue;
+          const short = a._gn.length < b._gn.length ? a._gn : b._gn;
+          const long  = a._gn.length < b._gn.length ? b._gn : a._gn;
+          if (short.length >= 4 && !long.startsWith(short)) continue;
+          if (!long.startsWith(short) && Math.abs(a._gn.length - b._gn.length) < 2) continue;
+          addPair(a.id, b.id, 'surname+initial');
+        }
+      }
+    }
+
+    // Signal 2: one person's nickname matches another person's given name.
+    // Sourced from address_book (where nickname lives) → person_id.
+    const nickRows = db.prepare(`
+      SELECT ab.person_id AS pid, ab.nickname AS nick
+      FROM address_book ab
+      WHERE ab.nickname IS NOT NULL AND ab.person_id IS NOT NULL
+    `).all();
+    const givenRows = db.prepare(`
+      SELECT id AS pid, given_name AS gn
+      FROM people
+      WHERE given_name IS NOT NULL
+    `).all();
+    const givenByNorm = new Map();
+    for (const g of givenRows) {
+      const k = norm(g.gn);
+      if (!k) continue;
+      if (!givenByNorm.has(k)) givenByNorm.set(k, new Set());
+      givenByNorm.get(k).add(g.pid);
+    }
+    for (const n of nickRows) {
+      const k = norm(n.nick);
+      if (!k) continue;
+      const hits = givenByNorm.get(k);
+      if (!hits) continue;
+      for (const other of hits) {
+        if (other !== n.pid) addPair(n.pid, other, 'nickname↔given');
+      }
+    }
+
+    // Signal 3: same display_name across different people (rare but happens).
+    const sameName = db.prepare(`
+      SELECT LOWER(display_name) AS dn, GROUP_CONCAT(id) AS ids
+      FROM people
+      WHERE display_name IS NOT NULL AND display_name != ''
+      GROUP BY LOWER(display_name)
+      HAVING COUNT(*) > 1
+    `).all();
+    for (const s of sameName) {
+      const ids = s.ids.split(',').map(Number);
+      for (let i = 0; i < ids.length; i++) {
+        for (let j = i + 1; j < ids.length; j++) addPair(ids[i], ids[j], 'same-display-name');
+      }
+    }
+
+    // Drop pairs the user has dismissed.
+    const rejected = new Set(
+      db.prepare("SELECT person_a || ':' || person_b AS k FROM rejected_merges").all().map(r => r.k),
+    );
+    const candidates = [];
+    for (const { a, b, signals } of pairScores.values()) {
+      if (rejected.has(`${a}:${b}`)) continue;
+      candidates.push({ a, b, signals: [...signals] });
+    }
+    // Rank by signal count desc, then by person id ascending for stability.
+    candidates.sort((x, y) => y.signals.length - x.signals.length || x.a - y.a);
+
+    // Hydrate with person summaries.
+    const ids = new Set();
+    for (const c of candidates.slice(0, limit)) { ids.add(c.a); ids.add(c.b); }
+    if (!ids.size) return [];
+    const idList = [...ids];
+    const ph = idList.map(() => '?').join(',');
+    const peopleRows = db.prepare(`
+      SELECT p.id, p.display_name, p.given_name, p.family_name,
+             (SELECT COUNT(*) FROM address_book WHERE person_id = p.id) AS ab_count,
+             (SELECT COUNT(*) FROM gloss_contacts WHERE person_id = p.id) AS gloss_count,
+             (SELECT GROUP_CONCAT(DISTINCT source) FROM address_book WHERE person_id = p.id) AS sources
+      FROM people p
+      WHERE p.id IN (${ph})
+    `).all(...idList);
+    const byId = new Map(peopleRows.map(r => [r.id, r]));
+
+    return candidates.slice(0, limit).map(c => ({
+      a: byId.get(c.a),
+      b: byId.get(c.b),
+      signals: c.signals,
+    })).filter(x => x.a && x.b);
+  } finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// contact_aliases — name-equivalence for messages/emails/notes/calendar.
+// The contract: the alias column is case-insensitive-unique, and `canonical`
+// is always terminal (never appears as an alias elsewhere). When inserting a
+// new alias whose canonical was itself an alias, we resolve through first.
+// ---------------------------------------------------------------------------
+
+function _resolveCanonicalRaw(db, name) {
+  if (!name) return name;
+  const row = db.prepare('SELECT canonical FROM contact_aliases WHERE alias = ? COLLATE NOCASE').get(name);
+  return row ? row.canonical : name;
+}
+
+function _namesForCanonicalRaw(db, canonical) {
+  const aliases = db.prepare('SELECT alias FROM contact_aliases WHERE canonical = ? COLLATE NOCASE').all(canonical).map(r => r.alias);
+  return [canonical, ...aliases];
+}
+
+// Resolve a contact name to its canonical form. Returns the input unchanged
+// if no alias row exists.
+function resolveCanonical(name) {
+  const db = openDb();
+  try { return _resolveCanonicalRaw(db, name); }
+  finally { db.close(); }
+}
+
+// Merge a set of names into one canonical. Idempotent. Handles transitivity:
+// if `canonical` itself happens to be an alias elsewhere, we point everything
+// at the ultimate canonical instead.
+function mergeContacts(canonical, aliases, reason = 'manual') {
+  if (!canonical) throw new Error('mergeContacts: canonical is required');
+  if (!Array.isArray(aliases) || aliases.length === 0) {
+    throw new Error('mergeContacts: aliases must be a non-empty array');
+  }
+  const db = openDb();
+  try {
+    const now = new Date().toISOString();
+    // Resolve canonical through existing chain so invariant holds.
+    const finalCanonical = _resolveCanonicalRaw(db, canonical);
+
+    db.transaction(() => {
+      const ins = db.prepare(`
+        INSERT INTO contact_aliases (alias, canonical, reason, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(alias) DO UPDATE SET
+          canonical = excluded.canonical,
+          reason    = excluded.reason,
+          created_at = excluded.created_at
+      `);
+      // If any "alias" we're inserting is itself currently a canonical for
+      // other rows, redirect those too — canonical must stay terminal.
+      const repoint = db.prepare('UPDATE contact_aliases SET canonical = ?, reason = ?, created_at = ? WHERE canonical = ? COLLATE NOCASE');
+      for (const a of aliases) {
+        if (!a) continue;
+        if (a.toLowerCase() === finalCanonical.toLowerCase()) continue; // no self-alias
+        ins.run(a, finalCanonical, reason, now);
+        repoint.run(finalCanonical, `transitive via ${a}`, now, a);
+      }
+    })();
+
+    return { canonical: finalCanonical, merged: aliases.length };
+  } finally { db.close(); }
+}
+
+function unmergeContact(alias) {
+  const db = openDb();
+  try {
+    const r = db.prepare('DELETE FROM contact_aliases WHERE alias = ? COLLATE NOCASE').run(alias);
+    return { removed: r.changes };
+  } finally { db.close(); }
+}
+
+function listAliases() {
+  const db = openDb();
+  try {
+    return db.prepare('SELECT alias, canonical, reason, created_at FROM contact_aliases ORDER BY canonical COLLATE NOCASE, alias COLLATE NOCASE').all();
+  } finally { db.close(); }
+}
+
+function dismissMergeSuggestion(a, b) {
+  const [name_a, name_b] = [a, b].sort((x, y) => x.toLowerCase().localeCompare(y.toLowerCase()));
+  const db = openDb();
+  try {
+    db.prepare(`
+      INSERT OR IGNORE INTO merge_dismissals (name_a, name_b, created_at) VALUES (?, ?, ?)
+    `).run(name_a, name_b, new Date().toISOString());
+  } finally { db.close(); }
+}
+
+function _unused_legacy_findDuplicateCandidates({ minNameSimilarity = 0.88 } = {}) {
+  const db = openDb();
+  try {
+    const dismissed = new Set(
+      db.prepare('SELECT name_a, name_b FROM merge_dismissals').all()
+        .map(r => `${r.name_a.toLowerCase()}|${r.name_b.toLowerCase()}`)
+    );
+    const aliased = new Set(
+      db.prepare('SELECT alias FROM contact_aliases').all().map(r => r.alias.toLowerCase())
+    );
+
+    // Pairs: map of "a|b" (sorted lowercase) -> { a, b, reasons: [{why, score}] }
+    const pairs = new Map();
+    const addPair = (a, b, why, score) => {
+      if (!a || !b) return;
+      if (a.toLowerCase() === b.toLowerCase()) return;
+      // Skip pairs where either side is already an alias (already merged or
+      // pending — irrelevant as a new suggestion).
+      if (aliased.has(a.toLowerCase()) || aliased.has(b.toLowerCase())) return;
+      const [x, y] = [a, b].sort((p, q) => p.toLowerCase().localeCompare(q.toLowerCase()));
+      const key = `${x.toLowerCase()}|${y.toLowerCase()}`;
+      if (dismissed.has(key)) return;
+      if (!pairs.has(key)) pairs.set(key, { a: x, b: y, reasons: [] });
+      pairs.get(key).reasons.push({ why, score });
+    };
+
+    // Heuristic 1: shared email address under different contact names.
+    for (const r of db.prepare(`
+      SELECT a.contact AS name_a, b.contact AS name_b, a.email_address AS email
+      FROM emails a
+      JOIN emails b ON lower(a.email_address) = lower(b.email_address)
+                   AND lower(a.contact) < lower(b.contact)
+      WHERE a.email_address IS NOT NULL AND a.email_address != ''
+      GROUP BY lower(a.contact), lower(b.contact), lower(a.email_address)
+    `).all()) {
+      addPair(r.name_a, r.name_b, `shared email: ${r.email}`, 0.95);
+    }
+
+    // Heuristic 2: shared phone handle in messages.
+    for (const r of db.prepare(`
+      SELECT a.contact AS name_a, b.contact AS name_b, a.handle_id AS handle
+      FROM messages a
+      JOIN messages b ON a.handle_id = b.handle_id
+                     AND lower(a.contact) < lower(b.contact)
+      WHERE a.handle_id IS NOT NULL
+      GROUP BY lower(a.contact), lower(b.contact), a.handle_id
+    `).all()) {
+      addPair(r.name_a, r.name_b, `shared iMessage handle: ${r.handle}`, 0.95);
+    }
+
+    // Heuristic 3: calendar attendee email matches a Comms email row but with
+    // a different displayed contact name.
+    const calRows = db.prepare('SELECT attendees FROM calendar_events WHERE attendees IS NOT NULL').all();
+    const calAttendees = []; // [{name, email}]
+    for (const r of calRows) {
+      try {
+        for (const att of JSON.parse(r.attendees || '[]')) {
+          if (att?.email && att?.name) calAttendees.push({ name: att.name, email: att.email });
+        }
+      } catch {}
+    }
+    const emailLookup = db.prepare('SELECT contact FROM emails WHERE lower(email_address) = lower(?) LIMIT 1');
+    const seenBridge = new Set();
+    for (const att of calAttendees) {
+      const hit = emailLookup.get(att.email);
+      if (!hit) continue;
+      if (hit.contact.toLowerCase() === att.name.toLowerCase()) continue;
+      const k = `${att.name.toLowerCase()}|${hit.contact.toLowerCase()}|${att.email.toLowerCase()}`;
+      if (seenBridge.has(k)) continue;
+      seenBridge.add(k);
+      addPair(att.name, hit.contact, `calendar attendee email matches (${att.email})`, 0.85);
+    }
+
+    // Heuristic 4: Gloss aliases (first_names) suggest merging variants into
+    // the canonical Gloss label.
+    const glossRows = db.prepare("SELECT contact, aliases FROM gloss_contacts WHERE aliases IS NOT NULL AND aliases != '[]'").all();
+    for (const g of glossRows) {
+      let aliases = [];
+      try { aliases = JSON.parse(g.aliases || '[]'); } catch { continue; }
+      for (const a of aliases) {
+        if (!a) continue;
+        // Only suggest if we actually have that alias appearing in comms.
+        const seen = db.prepare(`
+          SELECT 1 FROM messages WHERE contact = ? COLLATE NOCASE LIMIT 1
+          UNION SELECT 1 FROM emails WHERE contact = ? COLLATE NOCASE LIMIT 1
+        `).get(a, a);
+        if (!seen) continue;
+        addPair(g.contact, a, `Gloss alias on ${g.contact}`, 0.90);
+      }
+    }
+
+    // Heuristic 5: name similarity via Jaro-Winkler across distinct comms
+    // contact names. Capped at the first ~400 names to bound O(n^2).
+    const names = db.prepare(`
+      SELECT contact FROM (
+        SELECT contact FROM messages
+        UNION
+        SELECT contact FROM emails
+      )
+      WHERE contact IS NOT NULL AND contact != ''
+      ORDER BY contact COLLATE NOCASE
+    `).all().map(r => r.contact).slice(0, 400);
+    for (let i = 0; i < names.length; i++) {
+      for (let j = i + 1; j < names.length; j++) {
+        const a = names[i], b = names[j];
+        // Cheap length filter first.
+        if (Math.abs(a.length - b.length) > Math.max(a.length, b.length) * 0.5) continue;
+        const jw = jaroWinkler(a, b);
+        if (jw >= minNameSimilarity) {
+          addPair(a, b, `name similarity (${jw.toFixed(2)})`, Math.min(0.75, 0.5 + jw * 0.25));
+        }
+      }
+    }
+
+    // Cluster pairs via union-find.
+    const parent = new Map();
+    const find = (x) => {
+      while (parent.get(x) !== x) {
+        parent.set(x, parent.get(parent.get(x)));
+        x = parent.get(x);
+      }
+      return x;
+    };
+    const union = (x, y) => {
+      const rx = find(x), ry = find(y);
+      if (rx !== ry) parent.set(rx, ry);
+    };
+    for (const { a, b } of pairs.values()) {
+      const la = a.toLowerCase(), lb = b.toLowerCase();
+      if (!parent.has(la)) parent.set(la, la);
+      if (!parent.has(lb)) parent.set(lb, lb);
+      union(la, lb);
+    }
+
+    const clusters = new Map();
+    const displayNameFor = new Map();
+    for (const { a, b } of pairs.values()) {
+      displayNameFor.set(a.toLowerCase(), a);
+      displayNameFor.set(b.toLowerCase(), b);
+    }
+    for (const { a, b, reasons } of pairs.values()) {
+      const root = find(a.toLowerCase());
+      if (!clusters.has(root)) clusters.set(root, { names: new Set(), reasons: [], maxScore: 0 });
+      const c = clusters.get(root);
+      c.names.add(a); c.names.add(b);
+      for (const r of reasons) {
+        c.reasons.push({ a, b, why: r.why, score: r.score });
+        if (r.score > c.maxScore) c.maxScore = r.score;
+      }
+    }
+
+    // For each cluster, pick a canonical candidate: Gloss contact name if one
+    // is present; else name with most messages+emails; tiebreak alphabetical.
+    const glossNames = new Set(db.prepare('SELECT lower(contact) AS c FROM gloss_contacts').all().map(r => r.c));
+    const counts = db.prepare(`
+      SELECT contact, COUNT(*) AS n FROM (
+        SELECT contact FROM messages UNION ALL SELECT contact FROM emails
+      ) GROUP BY contact COLLATE NOCASE
+    `).all();
+    const countByName = new Map(counts.map(r => [r.contact.toLowerCase(), r.n]));
+
+    const output = [];
+    for (const cluster of clusters.values()) {
+      const names = [...cluster.names];
+      let best = names[0], bestKey = [-1, -1, ''];
+      for (const n of names) {
+        const key = [
+          glossNames.has(n.toLowerCase()) ? 1 : 0,
+          countByName.get(n.toLowerCase()) || 0,
+          -n.toLowerCase().charCodeAt(0),
+        ];
+        if (key[0] > bestKey[0] ||
+           (key[0] === bestKey[0] && key[1] > bestKey[1]) ||
+           (key[0] === bestKey[0] && key[1] === bestKey[1] && key[2] > bestKey[2])) {
+          best = n; bestKey = key;
+        }
+      }
+
+      const countsOut = {};
+      for (const n of names) countsOut[n] = countByName.get(n.toLowerCase()) || 0;
+
+      output.push({
+        names: names.sort((x, y) => x.toLowerCase().localeCompare(y.toLowerCase())),
+        suggested_canonical: best,
+        max_score: cluster.maxScore,
+        reasons: cluster.reasons,
+        counts: countsOut,
+      });
+    }
+
+    output.sort((x, y) => y.max_score - x.max_score);
+    return output;
+  } finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// app_settings — key/value store for user preferences
+// ---------------------------------------------------------------------------
+
+function getSetting(key, defaultValue = null) {
+  const db = openDb();
+  try {
+    const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key);
+    return row ? JSON.parse(row.value) : defaultValue;
+  } finally { db.close(); }
+}
+
+function saveSetting(key, value) {
+  const db = openDb();
+  try {
+    db.prepare(`
+      INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(key, JSON.stringify(value), new Date().toISOString());
+  } finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// special_dates — birthdays, anniversaries, deaths, memorials, custom
+// ---------------------------------------------------------------------------
+
+function upsertSpecialDate({ id, contact, type, month, day, year, label, notes, source, source_id }) {
+  if (!id || !type || !month || !day) throw new Error('upsertSpecialDate: id, type, month, day are required');
+  const db = openDb();
+  try {
+    db.prepare(`
+      INSERT INTO special_dates (id, contact, type, month, day, year, label, notes, source, source_id, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        contact    = excluded.contact,
+        type       = excluded.type,
+        month      = excluded.month,
+        day        = excluded.day,
+        year       = excluded.year,
+        label      = excluded.label,
+        notes      = excluded.notes,
+        source     = excluded.source,
+        source_id  = excluded.source_id,
+        updated_at = excluded.updated_at
+    `).run(
+      id,
+      contact || null,
+      type,
+      month,
+      day,
+      year || null,
+      label || null,
+      notes || null,
+      source || 'manual',
+      source_id || null,
+      new Date().toISOString(),
+    );
+  } finally { db.close(); }
+}
+
+function listUpcomingSpecialDates({ days = 60 } = {}) {
+  const db = openDb();
+  try {
+    const rows = db.prepare('SELECT * FROM special_dates ORDER BY month, day').all();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    // Deduplicate by (contact, type, month, day) — multiple Apple/Google source
+    // DBs can produce duplicate entries for the same person.
+    const seen = new Map();
+    const result = [];
+    for (const r of rows) {
+      const thisYear = today.getFullYear();
+      let next = new Date(thisYear, r.month - 1, r.day);
+      next.setHours(0, 0, 0, 0);
+      if (next < today) next = new Date(thisYear + 1, r.month - 1, r.day);
+      const days_until = Math.round((next - today) / 86400000);
+      if (days_until > days) continue;
+      const dedupeKey = `${(r.contact || '').toLowerCase()}|${r.type}|${r.month}|${r.day}`;
+      if (!seen.has(dedupeKey)) {
+        seen.set(dedupeKey, true);
+        result.push({ ...r, days_until, next_date: next.toISOString().slice(0, 10) });
+      }
+    }
+    result.sort((a, b) => a.days_until - b.days_until);
+    return result;
+  } finally { db.close(); }
+}
+
+function listSpecialDates({ contact } = {}) {
+  const db = openDb();
+  try {
+    if (contact) {
+      return db.prepare('SELECT * FROM special_dates WHERE contact = ? COLLATE NOCASE ORDER BY month, day').all(contact);
+    }
+    return db.prepare('SELECT * FROM special_dates ORDER BY month, day').all();
+  } finally { db.close(); }
+}
+
+function getSpecialDatesForContact(name) {
+  return listSpecialDates({ contact: name });
+}
+
+function deleteSpecialDate(id) {
+  const db = openDb();
+  try { db.prepare('DELETE FROM special_dates WHERE id = ?').run(id); }
+  finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// Sent message/email samples — for AI writing style inference
+// ---------------------------------------------------------------------------
+
+function getRecentSentMessagesForStyle(name, { limit = 20, days = 90 } = {}) {
+  const db = openDb();
+  try {
+    const cutoff = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
+    const sent_messages = db.prepare(`
+      SELECT text, sent_at FROM messages
+      WHERE contact = ? COLLATE NOCASE AND direction = 'sent'
+        AND text IS NOT NULL AND date >= ?
+      ORDER BY sent_at DESC LIMIT ?
+    `).all(name, cutoff, limit);
+    const sent_emails = db.prepare(`
+      SELECT subject, snippet FROM emails
+      WHERE contact = ? COLLATE NOCASE AND direction = 'sent' AND date >= ?
+      ORDER BY rowid DESC LIMIT ?
+    `).all(name, cutoff, limit);
+    return { sent_messages, sent_emails };
   } finally { db.close(); }
 }
 
@@ -1111,6 +2806,7 @@ function getOverview() {
       SELECT MAX(synced_at) AS last_pushed, COUNT(*) AS total, SUM(CASE WHEN priority >= 1 THEN 1 ELSE 0 END) AS priority
       FROM gloss_contacts
     `).get() || {};
+    const glossNotes    = db.prepare(`SELECT COUNT(*) AS n FROM gloss_notes`).get()?.n || 0;
     const gmailAccounts = db.prepare(`SELECT COUNT(*) AS n FROM gmail_accounts`).get()?.n || 0;
     return {
       last_run: lastRun,
@@ -1123,6 +2819,7 @@ function getOverview() {
         last_pushed: glossInfo.last_pushed || null,
         total: glossInfo.total || 0,
         priority: glossInfo.priority || 0,
+        notes: glossNotes,
       },
       gmail_accounts: gmailAccounts,
     };
@@ -1170,11 +2867,30 @@ module.exports = {
   // Gloss profiles
   upsertGlossContact, getGlossContact, listContacts, getContactDetail, getRecentCommsForAI,
   saveContactInsight,
+  // Gloss notes
+  upsertGlossNote,
   // Calendar
   upsertCalendarEvents, pruneOldCalendarEvents, listCalendarEvents, getCalendarEvent,
   getMeetingBrief, saveMeetingBrief,
   // Nudges
   getNudges, dismissNudge, isoWeekOf,
+  // User-authored contact profile
+  getContactProfile, saveContactProfile,
+  // Agenda items (person- and event-scoped)
+  listAgendaItems, addAgendaItem, updateAgendaItem, deleteAgendaItem,
+  // Custom playbook models
+  listCustomPlaybookModels, getCustomPlaybookModel, saveCustomPlaybookModel, deleteCustomPlaybookModel,
+  // Address book
+  upsertAddressBookContact, pruneAddressBookAccount, recordAddressBookSync,
+  listAddressBook, getAddressBookContact, findAddressBookByIdentifiers, addressBookStats,
+  // People — canonical identity registry
+  rebuildPeople, resolvePerson, getPerson, mergePeople, rejectMergePair, findDuplicateCandidates,
+  // App settings
+  getSetting, saveSetting,
+  // Special dates
+  upsertSpecialDate, listUpcomingSpecialDates, listSpecialDates, getSpecialDatesForContact, deleteSpecialDate,
+  // Sent message style samples
+  getRecentSentMessagesForStyle,
   // Overview + search
   getOverview, searchAll,
   DB_PATH,

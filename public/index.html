@@ -316,6 +316,68 @@ main.view {
 .email-row-compact .subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .email-row-compact .snippet { flex-basis: 100%; color: var(--muted); font-size: 12px; padding-left: 86px; margin-top: 2px; }
 
+/* ─── Unified timeline ────────────────────────────────────────────────── */
+.tl-item {
+  display: flex; gap: 10px; padding: 9px 0;
+  border-bottom: 1px solid var(--border); align-items: flex-start;
+}
+.tl-item:last-child { border-bottom: none; }
+.tl-badge {
+  flex-shrink: 0; font-size: 9px; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; padding: 2px 5px; border-radius: 4px; margin-top: 2px;
+  width: 44px; text-align: center;
+}
+.tl-badge-msg   { background: #1d2d4a; color: #7aa7e8; border: 1px solid #2a3f6a; }
+.tl-badge-email { background: #1a2e1a; color: #6abf6a; border: 1px solid #2a4a2a; }
+.tl-badge-cal   { background: #2a1f3a; color: #a07adf; border: 1px solid #3d2a5a; }
+.tl-badge-gnote { background: #1e2a2e; color: #6ab8c8; border: 1px solid #2a3e46; }
+.tl-body { flex: 1; min-width: 0; }
+.tl-meta { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+/* ─── Profile card + agenda ─────────────────────────────────────────── */
+.profile-card .profile-row { margin-bottom: 10px; font-size: 13px; line-height: 1.55; }
+.profile-card .profile-row:last-child { margin-bottom: 0; }
+.profile-card .profile-row .label {
+  display: inline-block; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted); margin-right: 8px; min-width: 90px;
+}
+.profile-card .profile-row .text { color: var(--fg); white-space: pre-wrap; }
+.profile-card .profile-row .text.muted { color: var(--muted); }
+.chip.chip-rel { background: #24304a; color: #a7c0e8; border-color: #2f4069; }
+
+.form-label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 0; }
+.form-label input[type="text"], .form-label input[type="number"], .form-label textarea {
+  width: 100%; margin-top: 4px; padding: 8px 10px;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; font: inherit; font-size: 13px;
+}
+.form-label textarea { resize: vertical; min-height: 60px; font-family: inherit; }
+
+.agenda-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.agenda-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); font-size: 13px;
+}
+.agenda-item .agenda-text { flex: 1; }
+.agenda-item.done .agenda-text { color: var(--muted); text-decoration: line-through; }
+.agenda-item .agenda-del {
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 18px; line-height: 1; padding: 0 4px;
+}
+.agenda-item .agenda-del:hover { color: #d46a6a; }
+.agenda-add { display: flex; gap: 8px; }
+.agenda-add input {
+  flex: 1; padding: 8px 10px; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 13px;
+}
+
+.tl-title { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+a.tl-title { color: var(--fg); text-decoration: none; }
+a.tl-title:hover { color: var(--accent); text-decoration: underline; }
+.tl-item .snippet { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.gnote-link { color: inherit; text-decoration: none; }
+.gnote-link:hover { color: var(--accent); text-decoration: underline; }
+
 /* ─── Calendar view ──────────────────────────────────────────────────── */
 .calendar-list { flex: 1; overflow-y: auto; padding: 20px 28px 60px; max-width: 820px; width: 100%; margin: 0 auto; }
 .day-group { margin-bottom: 22px; }
@@ -481,6 +543,7 @@ main.view {
     <nav class="nav">
       <button class="nav-item active" data-view="contacts"><span class="ico">◉</span>Contacts<span class="count" id="count-contacts"></span></button>
       <button class="nav-item" data-view="calendar"><span class="ico">▤</span>Calendar<span class="count" id="count-calendar"></span></button>
+      <button class="nav-item" data-view="dates"><span class="ico">♡</span>Dates<span class="count" id="count-dates"></span></button>
       <button class="nav-item" data-view="daily"><span class="ico">☰</span>Daily</button>
     </nav>
     <section class="nudges-section">
@@ -496,6 +559,10 @@ main.view {
         <div class="pane-list-header">
           <span>People</span>
           <span class="count" id="contact-count"></span>
+        </div>
+        <div id="duplicates-banner" style="display:none;padding:8px 14px;background:rgba(255,180,60,0.08);border-bottom:1px solid var(--border);font-size:12px;color:var(--text-dim);align-items:center;justify-content:space-between;gap:8px">
+          <span id="duplicates-banner-label"></span>
+          <button class="btn ghost small" onclick="openDuplicatesModal()">Review</button>
         </div>
         <div class="pane-list-body" id="contact-list">
           <div style="padding:16px;color:var(--muted);font-size:12px">Loading…</div>
@@ -517,6 +584,47 @@ main.view {
       </div>
       <div class="calendar-list" id="calendar-body">
         <div style="padding:40px 0;color:var(--muted);text-align:center;font-size:13px">Loading…</div>
+      </div>
+    </section>
+
+    <!-- Dates view -->
+    <section id="view-dates" class="view-section" style="flex-direction:column">
+      <div class="sync-banner">
+        <span>Upcoming special dates</span>
+        <div class="right">
+          <button class="btn ghost small" onclick="openAddDateModal()">+ Add</button>
+        </div>
+      </div>
+      <div id="dates-body" style="overflow-y:auto;flex:1;padding:16px 24px">
+        <div style="padding:40px 0;color:var(--muted);text-align:center;font-size:13px">Loading…</div>
+      </div>
+    </section>
+
+    <!-- Address book view -->
+    <section id="view-address-book" class="view-section">
+      <div class="pane-list">
+        <div class="pane-list-header" style="display:flex;flex-direction:column;align-items:stretch;gap:8px;padding-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span>Address book</span>
+            <span class="count" id="ab-count"></span>
+          </div>
+          <input type="text" id="ab-search" placeholder="Search name, email, phone, org…"
+            oninput="onAddressBookSearch(this.value)"
+            style="width:100%;padding:6px 8px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;font-size:12px">
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn ghost small" data-ab-filter="" onclick="setAddressBookFilter('')">All</button>
+            <button class="btn ghost small" data-ab-filter="apple" onclick="setAddressBookFilter('apple')">Apple</button>
+            <button class="btn ghost small" data-ab-filter="google" onclick="setAddressBookFilter('google')">Google</button>
+            <button class="btn ghost small" onclick="syncAddressBook()" style="margin-left:auto">Sync</button>
+          </div>
+        </div>
+        <div class="pane-list-body" id="ab-list">
+          <div style="padding:16px;color:var(--muted);font-size:12px">Loading…</div>
+        </div>
+      </div>
+      <div class="pane-detail" id="ab-detail">
+        <button class="back-link-btn" onclick="closeAddressBookDetail()">← Back</button>
+        <div class="empty-state">Select a contact to see details.</div>
       </div>
     </section>
 
@@ -551,6 +659,8 @@ main.view {
 
     <div style="border-top:1px solid var(--border);margin:18px 0 12px"></div>
 
+    <div class="settings-section-label">Calendars</div>
+    <div id="calendar-settings-list" style="margin-bottom:10px;font-size:12px;color:var(--text-dim)">Loading…</div>
     <button class="btn ghost small" onclick="pollCalendarNow()">Sync calendar now</button>
 
     <div class="modal-actions">
@@ -558,6 +668,178 @@ main.view {
         <button class="btn ghost small" type="submit">Sign out</button>
       </form>
       <button class="btn small" onclick="closeModal('settings-modal')">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- Profile edit modal -->
+<div class="modal-backdrop" id="profile-modal" onclick="if(event.target===this)closeModal('profile-modal')">
+  <div class="modal" style="max-width:520px">
+    <h2>Edit profile — <span id="profile-name" style="font-weight:500;color:var(--muted)"></span></h2>
+
+    <label class="form-label">Relationship
+      <input type="text" id="profile-relationship" placeholder="spouse, coworker, friend, mentor…" />
+    </label>
+
+    <label class="form-label">How they are (personality, how to interact)
+      <textarea id="profile-personality" rows="3" placeholder="Prefers direct questions. Processes out loud. Strong opinions on…"></textarea>
+    </label>
+
+    <label class="form-label">Practical notes (coffee order, kids' names, etc.)
+      <textarea id="profile-practical" rows="3" placeholder="Oat milk latte. Two kids: Maya (7), Leo (4)."></textarea>
+    </label>
+
+    <label class="form-label">Goal (how you want this relationship to grow)
+      <textarea id="profile-goals" rows="2" placeholder="More trust on shared projects. Less transactional."></textarea>
+    </label>
+
+    <label class="form-label">Follow-up every N days
+      <input type="number" id="profile-followup" min="1" step="1" placeholder="14" style="max-width:120px" />
+    </label>
+
+    <div class="modal-actions">
+      <button class="btn ghost small" onclick="closeModal('profile-modal')">Cancel</button>
+      <button class="btn small" id="profile-save-btn" onclick="saveProfileFromModal()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add special date modal -->
+<div class="modal-backdrop" id="add-date-modal" onclick="if(event.target===this)closeModal('add-date-modal')">
+  <div class="modal" style="max-width:460px">
+    <h2>Add special date</h2>
+
+    <label class="form-label">Type
+      <select id="add-date-type" style="font:inherit;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;width:100%">
+        <option value="birthday">Birthday</option>
+        <option value="anniversary">Anniversary</option>
+        <option value="death">In memory of (death anniversary)</option>
+        <option value="memorial">Memorial</option>
+        <option value="custom">Custom</option>
+      </select>
+    </label>
+
+    <label class="form-label">Person (optional)
+      <input type="text" id="add-date-contact" list="add-date-contact-list" placeholder="Contact name" />
+      <datalist id="add-date-contact-list"></datalist>
+    </label>
+
+    <label class="form-label">Label (required for Custom type)
+      <input type="text" id="add-date-label" placeholder="e.g. Grandpa Joe's passing" />
+    </label>
+
+    <div style="display:flex;gap:10px">
+      <label class="form-label" style="flex:1">Month
+        <input type="number" id="add-date-month" min="1" max="12" placeholder="1–12" />
+      </label>
+      <label class="form-label" style="flex:1">Day
+        <input type="number" id="add-date-day" min="1" max="31" placeholder="1–31" />
+      </label>
+      <label class="form-label" style="flex:1">Year (opt.)
+        <input type="number" id="add-date-year" min="1900" max="2100" placeholder="YYYY" />
+      </label>
+    </div>
+
+    <label class="form-label">Notes (optional)
+      <textarea id="add-date-notes" rows="2" placeholder=""></textarea>
+    </label>
+
+    <div class="modal-actions">
+      <button class="btn ghost small" onclick="closeModal('add-date-modal')">Cancel</button>
+      <button class="btn small" onclick="saveSpecialDate()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Draft message modal -->
+<div class="modal-backdrop" id="draft-modal" onclick="if(event.target===this)closeModal('draft-modal')">
+  <div class="modal" style="max-width:560px">
+    <h2>Draft — <span id="draft-contact-label" style="font-weight:500;color:var(--muted)"></span></h2>
+    <div id="draft-body" style="min-height:80px">
+      <div class="insight-empty">Generating…</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost small" onclick="closeModal('draft-modal')">Close</button>
+      <button class="btn ghost small" id="draft-copy-btn" style="display:none" onclick="copyDraft()">Copy</button>
+      <button class="btn small" id="draft-regen-btn" onclick="regenDraft()">Regenerate</button>
+    </div>
+  </div>
+</div>
+
+<!-- Meeting prep modal -->
+<div class="modal-backdrop" id="prep-modal" onclick="if(event.target===this)closeModal('prep-modal')">
+  <div class="modal" style="max-width:680px">
+    <h2>Meeting prep — <span id="prep-event-title" style="font-weight:500;color:var(--muted)"></span></h2>
+    <div id="prep-body" class="brief-body" style="max-height:60vh;overflow-y:auto">
+      <div class="insight-empty">Loading…</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost small" onclick="closeModal('prep-modal')">Close</button>
+      <button class="btn small" id="prep-regen-btn" onclick="regenPrep()">Regenerate</button>
+    </div>
+  </div>
+</div>
+
+<!-- Meeting playbook modal -->
+<div class="modal-backdrop" id="playbook-modal" onclick="if(event.target===this)closeModal('playbook-modal')">
+  <div class="modal" style="max-width:760px">
+    <h2>Meeting playbook — <span id="playbook-event-title" style="font-weight:500;color:var(--muted)"></span></h2>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+      <label class="form-label" style="margin:0" for="playbook-model-select">Framework</label>
+      <select id="playbook-model-select" style="flex:1;min-width:200px;padding:6px 8px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px"></select>
+      <button class="btn small" id="playbook-gen-btn" onclick="regenPlaybook()">Generate</button>
+      <button class="btn ghost small" onclick="openPlaybookManager()">Manage custom…</button>
+    </div>
+    <div id="playbook-body" class="brief-body" style="max-height:60vh;overflow-y:auto">
+      <div class="insight-empty">Pick a framework and click Generate.</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost small" onclick="closeModal('playbook-modal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Custom playbook model manager -->
+<div class="modal-backdrop" id="playbook-manager-modal" onclick="if(event.target===this)closeModal('playbook-manager-modal')">
+  <div class="modal" style="max-width:720px">
+    <h2>Custom frameworks</h2>
+    <div class="insight-empty" style="margin-bottom:12px">
+      Add your own conversational models. Give it a short <em>key</em> (slug), a <em>label</em> (display name), and a <em>blurb</em> that describes the stages — the blurb is what the AI reads to structure the walk-through.
+    </div>
+
+    <div id="playbook-custom-list" style="margin-bottom:16px">
+      <div class="insight-empty">Loading…</div>
+    </div>
+
+    <hr style="border:0;border-top:1px solid var(--border);margin:12px 0">
+
+    <h3 id="playbook-form-title" style="margin-bottom:10px">Add a framework</h3>
+    <input type="hidden" id="playbook-form-original-key" value="">
+    <label class="form-label" for="playbook-form-label">Label</label>
+    <input id="playbook-form-label" type="text" placeholder="e.g. Socratic 6-step" style="width:100%;padding:6px 8px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;margin-bottom:10px">
+    <label class="form-label" for="playbook-form-key">Key (slug)</label>
+    <input id="playbook-form-key" type="text" placeholder="e.g. socratic-6" style="width:100%;padding:6px 8px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;margin-bottom:10px">
+    <label class="form-label" for="playbook-form-blurb">Blurb (how the framework works)</label>
+    <textarea id="playbook-form-blurb" rows="8" placeholder="Describe the stages in order. E.g.:&#10;Socratic method — guide through questions, not statements:&#10;  1. Elicit — ask them to state their view.&#10;  2. Probe — ask clarifying questions.&#10;  3. Test — propose a counter-example.&#10;  ..." style="width:100%;padding:8px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;font-family:inherit;resize:vertical"></textarea>
+
+    <div class="modal-actions">
+      <button class="btn ghost small" onclick="closeModal('playbook-manager-modal')">Close</button>
+      <button class="btn ghost small" id="playbook-form-cancel-btn" onclick="resetPlaybookForm()" style="display:none">Cancel edit</button>
+      <button class="btn small" id="playbook-form-save-btn" onclick="savePlaybookForm()">Save framework</button>
+    </div>
+  </div>
+</div>
+
+<!-- Duplicates review modal -->
+<div class="modal-backdrop" id="duplicates-modal" onclick="if(event.target===this)closeModal('duplicates-modal')">
+  <div class="modal" style="max-width:640px">
+    <h2>Possible duplicates</h2>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px">
+      Contacts that look like the same person. Merge keeps both sources on one record; "Not same" dismisses the pair.
+    </div>
+    <div id="duplicates-list" style="max-height:60vh;overflow-y:auto"></div>
+    <div class="modal-actions">
+      <button class="btn small" onclick="closeModal('duplicates-modal')">Done</button>
     </div>
   </div>
 </div>
@@ -583,6 +865,7 @@ const state = {
   searchTerm: '',
   pollTimer: null,
   runsPollTimer: null,
+  duplicates: [],
 };
 
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -590,7 +873,20 @@ const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 // ═══════════════════════════════════════════════════════════════════════════
 // Utils
 // ═══════════════════════════════════════════════════════════════════════════
-async function api(url, opts) {
+// api(url) — GET
+// api(url, { method, headers, body })  — classic fetch opts
+// api(url, 'POST', bodyObj)            — ergonomic form; body is JSON-stringified
+async function api(url, methodOrOpts, maybeBody) {
+  let opts;
+  if (typeof methodOrOpts === 'string') {
+    opts = { method: methodOrOpts };
+    if (maybeBody !== undefined) {
+      opts.headers = { 'Content-Type': 'application/json' };
+      opts.body = JSON.stringify(maybeBody);
+    }
+  } else {
+    opts = methodOrOpts;
+  }
   const r = await fetch(url, opts);
   if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
   const json = await r.json().catch(() => ({}));
@@ -637,6 +933,32 @@ function formatTime(iso) {
   const d = new Date(iso);
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
+function formatDateTime(iso) {
+  if (!iso) return '';
+  // All-day calendar events arrive as "YYYY-MM-DD" with no time component.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+    const d = new Date(iso + 'T12:00:00');
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const date = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return `${date} · ${time}`;
+}
+function gmailThreadUrl(threadId, account) {
+  if (!threadId) return null;
+  // authuser=<email> makes Gmail open the right account if the user is signed
+  // into multiple. Without it, Gmail uses whichever account was active last.
+  const authuser = account ? `?authuser=${encodeURIComponent(account)}` : '';
+  return `https://mail.google.com/mail/${authuser}#inbox/${encodeURIComponent(threadId)}`;
+}
+function formatDateShort(ymd) {
+  if (!ymd) return '';
+  const d = new Date(ymd + 'T12:00:00');
+  if (isNaN(d)) return ymd;
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+}
 function formatDay(ymd) {
   if (!ymd) return '';
   const d = new Date(ymd + 'T12:00:00');
@@ -680,6 +1002,8 @@ function setView(name) {
   document.body.classList.remove('detail-open');
   if (name === 'contacts') { loadContacts(); }
   else if (name === 'calendar') { loadCalendar(); }
+  else if (name === 'dates') { loadDates(); }
+  else if (name === 'address-book') { loadAddressBook(); }
   else if (name === 'daily') { loadDaily(); }
   location.hash = '#/' + name;
 }
@@ -714,6 +1038,91 @@ async function loadContacts() {
     document.getElementById('count-contacts').textContent = contacts.length;
   } catch (e) { toast('Load failed: ' + e.message, 'err'); }
   loadNudges();
+  loadDuplicates();
+}
+
+async function loadDuplicates() {
+  try {
+    const { candidates } = await api('/api/people/duplicates?limit=50');
+    state.duplicates = candidates || [];
+  } catch { state.duplicates = []; }
+  renderDuplicatesBanner();
+}
+
+function renderDuplicatesBanner() {
+  const banner = document.getElementById('duplicates-banner');
+  const label = document.getElementById('duplicates-banner-label');
+  if (!banner) return;
+  const n = state.duplicates.length;
+  if (!n) { banner.style.display = 'none'; return; }
+  banner.style.display = 'flex';
+  label.textContent = `${n} possible duplicate${n === 1 ? '' : 's'} found`;
+}
+
+function openDuplicatesModal() {
+  renderDuplicatesModal();
+  openModal('duplicates-modal');
+}
+
+function renderDuplicatesModal() {
+  const host = document.getElementById('duplicates-list');
+  if (!host) return;
+  if (!state.duplicates.length) {
+    host.innerHTML = `<div style="padding:24px;color:var(--muted);text-align:center;font-size:13px">No candidates remaining.</div>`;
+    return;
+  }
+  host.innerHTML = state.duplicates.map(pair => renderDuplicatePairHtml(pair)).join('');
+}
+
+function renderDuplicatePairHtml(pair) {
+  const side = (p) => {
+    const bits = [];
+    if (p.ab_count) bits.push(`${p.ab_count} card${p.ab_count === 1 ? '' : 's'}`);
+    const srcs = typeof p.sources === 'string' ? p.sources.split(',').filter(Boolean) : (p.sources || []);
+    if (srcs.length) bits.push(srcs.map(s => s === 'apple' ? 'Apple' : 'Google').join(' · '));
+    return `<div style="flex:1">
+      <div style="font-weight:500">${esc(p.display_name || '(unnamed)')}</div>
+      <div class="timestamp" style="margin-top:2px">#${p.id}${bits.length ? ' · ' + bits.join(' · ') : ''}</div>
+    </div>`;
+  };
+  const signals = (pair.signals || []).map(s => `<span class="chip">${esc(s)}</span>`).join(' ');
+  return `<div class="card" style="margin-bottom:10px" data-dup-pair="${pair.a.id}-${pair.b.id}">
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:8px">
+      ${side(pair.a)}
+      <span style="color:var(--muted);font-size:14px">⇄</span>
+      ${side(pair.b)}
+    </div>
+    ${signals ? `<div style="margin-bottom:10px">${signals}</div>` : ''}
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn ghost small" onclick="rejectDuplicatePair(${pair.a.id}, ${pair.b.id})">Not same</button>
+      <button class="btn small" onclick="mergeDuplicatePair(${pair.a.id}, ${pair.b.id})">Merge</button>
+    </div>
+  </div>`;
+}
+
+async function mergeDuplicatePair(aId, bId) {
+  try {
+    await api('/api/people/merge', 'POST', { target_id: aId, other_ids: [bId] });
+    toast('Merged');
+    state.duplicates = state.duplicates.filter(p => !(p.a.id === aId && p.b.id === bId));
+    renderDuplicatesModal();
+    renderDuplicatesBanner();
+    loadContacts();
+    if (state.selectedContact) {
+      const detail = await api('/api/contacts/' + encodeURIComponent(state.selectedContact));
+      state.contactDetail = detail;
+      renderContactDetail();
+    }
+  } catch (e) { toast('Merge failed: ' + e.message, 'err'); }
+}
+
+async function rejectDuplicatePair(aId, bId) {
+  try {
+    await api('/api/people/reject-merge', 'POST', { a_id: aId, b_id: bId });
+    state.duplicates = state.duplicates.filter(p => !(p.a.id === aId && p.b.id === bId));
+    renderDuplicatesModal();
+    renderDuplicatesBanner();
+  } catch (e) { toast(e.message, 'err'); }
 }
 
 function renderContacts() {
@@ -754,9 +1163,12 @@ function renderContacts() {
     if (c.message_count) parts.push(`${c.message_count} msg`);
     if (c.email_count)   parts.push(`${c.email_count} email`);
     if (c.last_contact_date) parts.push(last);
-    const metaStr = parts.length ? parts.join(' · ') : (hasGloss ? 'no comms yet' : 'never');
-    const chips = (c.gloss?.linked_collections || []).slice(0, 3)
+    const metaStr = parts.length ? parts.join(' · ') : (hasGloss ? 'no comms yet' : (c.ab_count ? 'imported' : 'never'));
+    const srcChips = (c.ab_sources || [])
+      .map(s => `<span class="chip" title="${s === 'apple' ? 'Apple Contacts' : 'Google Contacts'}">${s === 'apple' ? 'Apple' : 'Google'}</span>`).join('');
+    const collChips = (c.gloss?.linked_collections || []).slice(0, 3)
       .map(title => `<span class="chip">${esc(title)}</span>`).join('');
+    const chips = srcChips + collChips;
     return `<div class="contact-row ${active}" onclick="selectContact('${esc(c.contact).replace(/'/g,"\\'")}')">
       <div class="${avatarCls}">${esc(initials(c.contact))}</div>
       <div class="main">
@@ -806,6 +1218,9 @@ function renderContactDetail() {
     ...d.emails_addrs.slice(0, 3),
   ].filter(Boolean).map(esc).join(' · ');
 
+  const altNames = (d.name_variants || [])
+    .filter(n => n && n.toLowerCase() !== (d.contact || '').toLowerCase());
+
   let html = `<button class="back-link-btn" onclick="closeContactDetail()">← Back</button>
   <div class="profile-header">
     <div class="${avatarCls}">${esc(initials(d.contact))}</div>
@@ -815,8 +1230,10 @@ function renderContactDetail() {
         ${handlesLine ? `<span>${handlesLine}</span>` : ''}
         ${s.first_contact_date ? `<span>since ${esc(s.first_contact_date)}</span>` : ''}
       </div>
+      ${altNames.length ? `<div class="meta" style="margin-top:4px"><span class="timestamp">also</span> ${altNames.map(n => `<span class="chip chip-alias">${esc(n)}</span>`).join(' ')}</div>` : ''}
     </div>
     <div class="actions">
+      <button class="btn ghost small" onclick="openDraftModal(${JSON.stringify(d.contact).replace(/"/g, '&quot;')}, 'check-in')">Draft message</button>
       ${g ? `<a class="btn" href="${esc(g.gloss_url)}" target="_blank" rel="noopener">Open in Gloss →</a>` : ''}
     </div>
   </div>
@@ -829,6 +1246,79 @@ function renderContactDetail() {
       ${s.last_contact_date ? `<div class="stat"><b>${esc(daysAgo(s.last_contact_date))}</b><span>Last contact</span></div>` : ''}
     </div>
   </div>`;
+
+  // Inline "Possibly same as…" — surface any duplicate-candidate pairs that
+  // involve this person, with one-click Merge / Not same.
+  if (d.person_id) {
+    const related = state.duplicates.filter(p => p.a.id === d.person_id || p.b.id === d.person_id);
+    if (related.length) {
+      html += `<div class="card" style="border-left:3px solid var(--accent,#e5a04d)">
+        <h3><span>Possibly same person</span><span class="timestamp">${related.length} candidate${related.length === 1 ? '' : 's'}</span></h3>`;
+      html += related.map(pair => {
+        const other = pair.a.id === d.person_id ? pair.b : pair.a;
+        const srcs = typeof other.sources === 'string' ? other.sources.split(',').filter(Boolean) : (other.sources || []);
+        const srcLabel = srcs.length ? srcs.map(x => x === 'apple' ? 'Apple' : 'Google').join(' · ') : '';
+        const reason = (pair.signals || []).join(', ');
+        return `<div class="timeline-row" style="display:flex;justify-content:space-between;gap:10px;align-items:center">
+          <div>
+            <strong>${esc(other.display_name || '(unnamed)')}</strong>
+            <span class="timestamp"> · #${other.id}${srcLabel ? ' · ' + srcLabel : ''}${reason ? ' · ' + esc(reason) : ''}</span>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn ghost small" onclick="rejectDuplicatePair(${pair.a.id}, ${pair.b.id})">Not same</button>
+            <button class="btn small" onclick="mergeDuplicatePair(${pair.a.id}, ${pair.b.id})">Merge</button>
+          </div>
+        </div>`;
+      }).join('');
+      html += `</div>`;
+    }
+  }
+
+  // Address book match(es) — one card showing canonical names, orgs, sources
+  if (d.address_book && d.address_book.length) {
+    const personBit = d.person_id
+      ? `<span class="timestamp">person #${d.person_id} · </span>`
+      : '';
+    html += `<div class="card"><h3>
+      <span>Address book</span>
+      <span class="timestamp">${personBit}${d.address_book.length} match${d.address_book.length === 1 ? '' : 'es'}</span>
+    </h3>`;
+    html += d.address_book.map(ab => {
+      const bits = [];
+      if (ab.organization) bits.push(esc(ab.organization));
+      if (ab.job_title) bits.push(esc(ab.job_title));
+      const srcLabel = ab.source === 'apple' ? 'Apple' : `Google · ${esc(ab.source_account)}`;
+      return `<div class="timeline-row" style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">
+        <div>
+          <a href="#" onclick="event.preventDefault();setView('address-book');setTimeout(()=>selectAddressBookContact('${esc(ab.id)}'),30)"><strong>${esc(ab.display_name || '(unnamed)')}</strong></a>
+          ${bits.length ? `<span class="timestamp"> · ${bits.join(' · ')}</span>` : ''}
+        </div>
+        <span class="timestamp">${srcLabel}</span>
+      </div>`;
+    }).join('');
+    if (d.person_id) {
+      html += `<div style="margin-top:10px"><button class="btn ghost small" onclick="mergeWithAnother()">Merge another contact into this person…</button></div>`;
+    }
+    html += `</div>`;
+  }
+
+  // Special dates (birthdays, anniversaries) pulled from Apple/Google contacts
+  if (d.special_dates && d.special_dates.length) {
+    html += `<div class="card"><h3><span>Special dates</span><span class="timestamp">${d.special_dates.length}</span></h3>`;
+    html += d.special_dates.map(sd => {
+      const mo = ['', 'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][sd.month] || sd.month;
+      // Apple uses 1604 as a "year unknown" sentinel — hide it.
+      const year = sd.year && sd.year !== 1604 ? `, ${sd.year}` : '';
+      const when = `${mo} ${sd.day}${year}`;
+      const label = sd.label ? ` · ${esc(sd.label)}` : '';
+      const src = sd.source === 'apple' ? 'Apple' : sd.source === 'google' ? 'Google' : esc(sd.source || 'manual');
+      return `<div class="timeline-row" style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">
+        <div><strong>${esc(sd.type)}</strong>${label} <span class="timestamp">· ${esc(when)}</span></div>
+        <span class="timestamp">${src}</span>
+      </div>`;
+    }).join('');
+    html += `</div>`;
+  }
 
   // Gloss panel
   if (g) {
@@ -852,6 +1342,22 @@ function renderContactDetail() {
     html += `</div>`;
   }
 
+  // User-authored profile (personality, practical, goals, relationship, cadence)
+  html += renderProfileCard(d.contact, d.profile);
+
+  // Agenda for this person (things to bring up next time you see them)
+  html += `<div class="card" id="person-agenda-card">
+    <h3><span>Agenda</span>
+      <span class="timestamp" id="person-agenda-count"></span>
+    </h3>
+    <div id="person-agenda-list" class="agenda-list"></div>
+    <div class="agenda-add">
+      <input type="text" id="person-agenda-input" placeholder="Add something to bring up next time…"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();addPersonAgenda()}" />
+      <button class="btn small" onclick="addPersonAgenda()">Add</button>
+    </div>
+  </div>`;
+
   // AI insight
   html += `<div class="card">
     <h3>
@@ -870,39 +1376,238 @@ function renderContactDetail() {
     </div>
   </div>`;
 
-  // Recent comms — interleaved messages + emails
-  const msgs = d.messages || [];
-  const emails = d.emails || [];
-  if (msgs.length || emails.length) {
+  // Unified chronological timeline — messages, emails, calendar events, gloss notes
+  const msgs       = d.messages        || [];
+  const emails     = d.emails          || [];
+  const calEvts    = d.calendar_events || [];
+  const glossNotes = d.gloss_notes     || [];
+
+  const timeline = [];
+  for (const m of msgs)
+    timeline.push({ type: 'message', sortKey: m.sent_at || m.date, data: m });
+  for (const e of emails)
+    timeline.push({ type: 'email', sortKey: e.date, data: e });
+  for (const ev of calEvts)
+    timeline.push({ type: 'calendar', sortKey: ev.start_time || ev.date, data: ev });
+  for (const gn of glossNotes)
+    timeline.push({ type: 'gloss_note', sortKey: gn.date, data: gn });
+
+  timeline.sort((a, b) => (b.sortKey || '').localeCompare(a.sortKey || ''));
+
+  if (timeline.length) {
     html += `<div class="card recent-comms">
-      <h3><span>Recent</span><span class="timestamp">${(msgs.length + emails.length)} items</span></h3>`;
-    if (msgs.length) {
-      html += `<div class="msg-thread"><div class="thread-label">iMessages</div>`;
-      for (const m of msgs.slice(0, 20)) {
-        const ts = m.sent_at ? formatTime(m.sent_at) : '';
-        const sent = m.direction === 'sent' ? 'sent' : '';
-        html += `<div class="msg-bubble ${sent}"><div class="ts">${esc(ts)}</div><div class="txt">${esc(m.text || '(attachment)')}</div></div>`;
-      }
-      html += `</div>`;
-    }
-    if (emails.length) {
-      html += `<div class="msg-thread"><div class="thread-label">Emails</div>`;
-      for (const e of emails.slice(0, 15)) {
-        const arrow = e.direction === 'received' ? '↓' : '↑';
-        const cls = e.direction === 'received' ? 'received' : 'sent';
-        html += `<div class="email-row-compact">
-          <span class="dir ${cls}">${arrow}</span>
-          <span class="date-col">${esc(e.date || '')}</span>
-          <span class="subject">${esc(e.subject || '(no subject)')}</span>
-          ${e.snippet ? `<div class="snippet">${esc(e.snippet)}</div>` : ''}
+      <h3><span>Timeline</span><span class="timestamp">${timeline.length} items</span></h3>`;
+
+    for (const item of timeline.slice(0, 60)) {
+      const { type, data: x } = item;
+
+      if (type === 'message') {
+        const ts = x.sent_at ? formatDateTime(x.sent_at) : formatDateShort(x.date);
+        const sent = x.direction === 'sent' ? 'sent' : '';
+        html += `<div class="tl-item tl-msg">
+          <span class="tl-badge tl-badge-msg">iMsg</span>
+          <div class="tl-body">
+            <div class="tl-meta">${esc(ts)}</div>
+            <div class="msg-bubble ${sent}" style="margin:0"><div class="txt">${esc(x.text || '(attachment)')}</div></div>
+          </div>
+        </div>`;
+
+      } else if (type === 'email') {
+        const arrow = x.direction === 'received' ? '↓' : '↑';
+        const cls = x.direction === 'received' ? 'received' : 'sent';
+        const gmailUrl = gmailThreadUrl(x.thread_id, x.account);
+        const titleHtml = gmailUrl
+          ? `<a href="${esc(gmailUrl)}" target="_blank" rel="noopener" class="tl-title">${esc(x.subject || '(no subject)')}</a>`
+          : `<div class="tl-title">${esc(x.subject || '(no subject)')}</div>`;
+        html += `<div class="tl-item tl-email">
+          <span class="tl-badge tl-badge-email">Email</span>
+          <div class="tl-body">
+            <div class="tl-meta">${esc(formatDateShort(x.date))} <span class="dir ${cls}">${arrow}</span></div>
+            ${titleHtml}
+            ${x.snippet ? `<div class="snippet">${esc(x.snippet)}</div>` : ''}
+          </div>
+        </div>`;
+
+      } else if (type === 'calendar') {
+        const time = x.start_time ? formatDateTime(x.start_time) : formatDateShort(x.date);
+        const others = (x.attendees || []).filter(a => (a.name||'').toLowerCase() !== d.contact.toLowerCase()).map(a => esc(a.name || a.email)).slice(0, 4).join(', ');
+        html += `<div class="tl-item tl-cal">
+          <span class="tl-badge tl-badge-cal">Cal</span>
+          <div class="tl-body">
+            <div class="tl-meta">${esc(time)}</div>
+            <div class="tl-title">${esc(x.title || '(no title)')}</div>
+            ${others ? `<div class="snippet">with ${others}</div>` : ''}
+          </div>
+        </div>`;
+
+      } else if (type === 'gloss_note') {
+        const noteInner = x.gloss_url
+          ? `<a href="${esc(x.gloss_url)}" target="_blank" rel="noopener" class="gnote-link">${esc(x.note)}</a>`
+          : esc(x.note);
+        html += `<div class="tl-item tl-gnote">
+          <span class="tl-badge tl-badge-gnote">Note</span>
+          <div class="tl-body">
+            <div class="tl-meta">${esc(formatDateShort(x.date))}${x.collection ? ` · ${esc(x.collection)}` : ''}</div>
+            <div class="snippet" style="white-space:pre-wrap">${noteInner}</div>
+          </div>
         </div>`;
       }
-      html += `</div>`;
     }
     html += `</div>`;
   }
 
   document.getElementById('contact-detail').innerHTML = html;
+  loadPersonAgenda(d.contact);
+}
+
+// ─── User-authored profile ────────────────────────────────────────────────
+function renderProfileCard(contact, profile) {
+  const p = profile || {};
+  const rt = p.relationship_type;
+  const hasAny = rt || p.personality_notes || p.practical_notes || p.relationship_goals || p.followup_days;
+  const cadence = p.followup_days ? `every ${p.followup_days} day${p.followup_days === 1 ? '' : 's'}` : 'no reminder';
+  const body = hasAny ? `
+    ${rt ? `<div class="profile-row"><span class="label">Relationship</span><span class="chip chip-rel">${esc(rt)}</span></div>` : ''}
+    ${p.personality_notes ? `<div class="profile-row"><div class="label">How they are</div><div class="text">${esc(p.personality_notes)}</div></div>` : ''}
+    ${p.practical_notes ? `<div class="profile-row"><div class="label">Practical</div><div class="text">${esc(p.practical_notes)}</div></div>` : ''}
+    ${p.relationship_goals ? `<div class="profile-row"><div class="label">Goal</div><div class="text">${esc(p.relationship_goals)}</div></div>` : ''}
+    <div class="profile-row"><span class="label">Follow-up</span><span class="text muted">${esc(cadence)}</span></div>
+  ` : `<div class="insight-empty">No profile yet. Add personality, practical notes, goals, and a follow-up cadence.</div>`;
+  return `<div class="card profile-card">
+    <h3><span>Profile</span>
+      <button class="btn ghost small" onclick="openProfileModal()">${hasAny ? 'Edit' : 'Add profile'}</button>
+    </h3>
+    ${body}
+  </div>`;
+}
+
+function openProfileModal() {
+  const d = state.contactDetail;
+  if (!d) return;
+  const p = d.profile || {};
+  document.getElementById('profile-name').textContent = d.contact;
+  document.getElementById('profile-relationship').value = p.relationship_type || '';
+  document.getElementById('profile-personality').value = p.personality_notes || '';
+  document.getElementById('profile-practical').value = p.practical_notes || '';
+  document.getElementById('profile-goals').value = p.relationship_goals || '';
+  document.getElementById('profile-followup').value = p.followup_days ?? '';
+  openModal('profile-modal');
+}
+
+async function saveProfileFromModal() {
+  const d = state.contactDetail;
+  if (!d) return;
+  const patch = {
+    relationship_type:  document.getElementById('profile-relationship').value.trim(),
+    personality_notes:  document.getElementById('profile-personality').value.trim(),
+    practical_notes:    document.getElementById('profile-practical').value.trim(),
+    relationship_goals: document.getElementById('profile-goals').value.trim(),
+    followup_days:      document.getElementById('profile-followup').value.trim() || null,
+  };
+  const btn = document.getElementById('profile-save-btn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const { profile } = await api(`/api/contacts/${encodeURIComponent(d.contact)}/profile`, 'PUT', patch);
+    d.profile = profile;
+    closeModal('profile-modal');
+    renderContactDetail();
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save';
+  }
+}
+
+// ─── Agenda (person- and event-scoped) ────────────────────────────────────
+async function loadPersonAgenda(contact) {
+  try {
+    const { items } = await api(`/api/agenda/person/${encodeURIComponent(contact)}`);
+    renderAgendaList('person-agenda-list', 'person-agenda-count', items, () => loadPersonAgenda(contact));
+  } catch (e) { console.warn('[agenda]', e.message); }
+}
+
+// Maps listId to the reload function so checkbox/delete handlers can find it
+// without embedding closures in inline onclick attributes.
+const _agendaReloaders = {};
+
+function renderAgendaList(listId, countId, items, reloader) {
+  const list = document.getElementById(listId);
+  const count = document.getElementById(countId);
+  if (!list) return;
+  _agendaReloaders[listId] = reloader;
+  const open = items.filter(i => !i.done_at);
+  const done = items.filter(i => i.done_at);
+  if (count) count.textContent = open.length ? `${open.length} open` : (items.length ? `${items.length} done` : '');
+  const row = (i) => `<div class="agenda-item ${i.done_at ? 'done' : ''}" data-id="${esc(i.id)}">
+    <input type="checkbox" ${i.done_at ? 'checked' : ''}
+      onchange="toggleAgendaAndReload('${esc(i.id)}', this.checked, '${esc(listId)}')" />
+    <span class="agenda-text">${esc(i.content)}</span>
+    <button class="agenda-del" title="Delete"
+      onclick="deleteAgendaAndReload('${esc(i.id)}', '${esc(listId)}')">×</button>
+  </div>`;
+  list.innerHTML = items.length
+    ? (open.map(row).join('') + done.map(row).join(''))
+    : '<div class="insight-empty" style="padding:6px 0">Nothing on the agenda yet.</div>';
+}
+
+async function toggleAgendaAndReload(id, done, listId) {
+  await toggleAgenda(id, done);
+  const r = _agendaReloaders[listId]; if (r) r();
+}
+async function deleteAgendaAndReload(id, listId) {
+  if (!confirm('Delete this agenda item?')) return;
+  try { await api(`/api/agenda/${encodeURIComponent(id)}`, 'DELETE'); }
+  catch (e) { alert(e.message); return; }
+  const r = _agendaReloaders[listId]; if (r) r();
+}
+
+async function addPersonAgenda() {
+  const d = state.contactDetail;
+  if (!d) return;
+  const input = document.getElementById('person-agenda-input');
+  const content = input.value.trim();
+  if (!content) return;
+  input.value = '';
+  try {
+    await api('/api/agenda', 'POST', { scope_type: 'person', scope_id: d.contact, content });
+    loadPersonAgenda(d.contact);
+  } catch (e) { alert(e.message); }
+}
+
+async function toggleAgenda(id, done) {
+  try { await api(`/api/agenda/${encodeURIComponent(id)}`, 'PATCH', { done }); }
+  catch (e) { alert(e.message); }
+}
+
+
+// Merge another contact name's person into this person. Uses the lightweight
+// name→person resolver; if the target is ambiguous we bail rather than guess.
+async function mergeWithAnother() {
+  const d = state.contactDetail;
+  if (!d || !d.person_id) return;
+  const raw = prompt('Merge which contact into ' + d.contact + '?\n(Enter a name — aliases from Apple/Google or Gloss are fine.)');
+  const other = (raw || '').trim();
+  if (!other) return;
+  if (other.toLowerCase() === d.contact.toLowerCase()) { toast('Same contact', 'err'); return; }
+  try {
+    const r = await api('/api/people/resolve?name=' + encodeURIComponent(other));
+    const p = r.person;
+    if (!p) { toast('No person found for "' + other + '"', 'err'); return; }
+    if (p.id === d.person_id) { toast('Already the same person', 'err'); return; }
+    const names = (p.names || []).map(n => n.name).join(', ') || p.display_name || `#${p.id}`;
+    if (!confirm(`Merge person #${p.id} (${names}) into ${d.contact} (#${d.person_id})?\n\nThis sets merge_lock so the clusterer won't undo it.`)) return;
+    await api('/api/people/merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_id: d.person_id, other_ids: [p.id] }),
+    });
+    toast('Merged');
+    const detail = await api('/api/contacts/' + encodeURIComponent(d.contact));
+    state.contactDetail = detail;
+    renderContactDetail();
+  } catch (e) {
+    toast('Merge failed: ' + e.message, 'err');
+  }
 }
 
 async function regenInsight() {
@@ -971,6 +1676,149 @@ async function dismissNudge(contact) {
     if (state.view === 'contacts') renderContacts();
     toast('Dismissed for this week');
   } catch (e) { toast('Failed: ' + e.message, 'err'); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Address book (Apple Contacts + Google People)
+// ═══════════════════════════════════════════════════════════════════════════
+let _abSearchTimer = null;
+
+async function loadAddressBook() {
+  const list = document.getElementById('ab-list');
+  list.innerHTML = skeletonRows();
+  try {
+    const q = (state.addressBookQuery || '').trim();
+    const source = state.addressBookSource || '';
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (source) params.set('source', source);
+    const { stats, contacts } = await api('/api/address-book?' + params.toString());
+    state.addressBook = contacts;
+    state.addressBookStats = stats;
+    document.getElementById('count-address-book').textContent = stats.total || '';
+    document.getElementById('ab-count').textContent = `${contacts.length}${contacts.length < stats.total ? ` / ${stats.total}` : ''}`;
+    document.querySelectorAll('[data-ab-filter]').forEach(el => {
+      el.classList.toggle('active', el.dataset.abFilter === source);
+    });
+    renderAddressBookList();
+  } catch (e) {
+    list.innerHTML = `<div style="padding:16px;color:var(--muted);font-size:12px">${esc(e.message)}</div>`;
+  }
+}
+
+function renderAddressBookList() {
+  const host = document.getElementById('ab-list');
+  const contacts = state.addressBook || [];
+  if (!contacts.length) {
+    const stats = state.addressBookStats || { total: 0 };
+    const empty = stats.total === 0
+      ? 'No contacts imported yet. Click <strong>Sync</strong> to pull from Apple Contacts + Google.'
+      : 'No contacts match that search.';
+    host.innerHTML = `<div style="padding:16px;color:var(--muted);font-size:12px">${empty}</div>`;
+    return;
+  }
+  host.innerHTML = contacts.map(c => {
+    const sub = c.organization || (c.emails[0]?.value) || (c.phones[0]?.value) || '';
+    const badge = c.source === 'apple' ? 'Apple' : 'Google';
+    return `
+      <div class="contact-row" onclick="selectAddressBookContact('${esc(c.id)}')">
+        <div class="contact-name">${esc(c.display_name || '(unnamed)')}</div>
+        <div class="contact-sub" style="display:flex;justify-content:space-between;gap:8px">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub)}</span>
+          <span class="timestamp">${esc(badge)}</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function onAddressBookSearch(v) {
+  state.addressBookQuery = v;
+  clearTimeout(_abSearchTimer);
+  _abSearchTimer = setTimeout(() => loadAddressBook(), 180);
+}
+
+function setAddressBookFilter(source) {
+  state.addressBookSource = source;
+  loadAddressBook();
+}
+
+async function selectAddressBookContact(id) {
+  const detail = document.getElementById('ab-detail');
+  detail.innerHTML = `<button class="back-link-btn" onclick="closeAddressBookDetail()">← Back</button><div class="insight-empty">Loading…</div>`;
+  document.body.classList.add('detail-open');
+  try {
+    const { contact } = await api(`/api/address-book/${encodeURIComponent(id)}`);
+    renderAddressBookDetail(contact);
+  } catch (e) {
+    detail.innerHTML = `<button class="back-link-btn" onclick="closeAddressBookDetail()">← Back</button><div class="insight-empty">${esc(e.message)}</div>`;
+  }
+}
+
+function renderAddressBookDetail(c) {
+  const host = document.getElementById('ab-detail');
+  const emails = (c.emails || []).map(e =>
+    `<div class="timeline-row"><span class="timestamp">${esc(e.label || 'email')}</span> <a href="mailto:${esc(e.value)}" target="_blank">${esc(e.value)}</a></div>`
+  ).join('');
+  const phones = (c.phones || []).map(p =>
+    `<div class="timeline-row"><span class="timestamp">${esc(p.label || 'phone')}</span> <a href="tel:${esc(p.value)}" target="_blank">${esc(p.value)}</a></div>`
+  ).join('');
+  const meta = [];
+  if (c.organization) meta.push(`Org: ${esc(c.organization)}`);
+  if (c.job_title) meta.push(`Title: ${esc(c.job_title)}`);
+  if (c.nickname) meta.push(`"${esc(c.nickname)}"`);
+
+  host.innerHTML = `
+    <button class="back-link-btn" onclick="closeAddressBookDetail()">← Back</button>
+    <div class="contact-header">
+      <h2>${esc(c.display_name || '(unnamed)')}</h2>
+      <div class="timestamp">
+        ${esc(c.source === 'apple' ? 'Apple Contacts' : 'Google Contacts')} · ${esc(c.source_account)}
+      </div>
+    </div>
+    ${meta.length ? `<div class="insight-empty" style="margin-bottom:12px">${meta.join(' · ')}</div>` : ''}
+
+    ${emails ? `<div class="card"><h3><span>Email</span></h3>${emails}</div>` : ''}
+    ${phones ? `<div class="card"><h3><span>Phone</span></h3>${phones}</div>` : ''}
+    ${c.notes ? `<div class="card"><h3><span>Notes</span></h3><div class="brief-body">${esc(c.notes)}</div></div>` : ''}
+
+    <div class="card">
+      <h3><span>Timeline</span></h3>
+      <div class="insight-empty" style="margin-bottom:10px">See messages, emails, and meetings with this person.</div>
+      <button class="btn small" onclick="openCommsTimelineForAddressBook('${esc(c.id)}')">Open communication timeline</button>
+    </div>
+  `;
+}
+
+function openCommsTimelineForAddressBook(id) {
+  const c = (state.addressBook || []).find(x => x.id === id) || {};
+  const name = c.display_name;
+  if (!name) return;
+  setView('contacts');
+  setTimeout(() => selectContact(name), 30);
+}
+
+function closeAddressBookDetail() {
+  document.body.classList.remove('detail-open');
+  const detail = document.getElementById('ab-detail');
+  detail.innerHTML = `<button class="back-link-btn" onclick="closeAddressBookDetail()">← Back</button><div class="empty-state">Select a contact to see details.</div>`;
+}
+
+async function syncAddressBook() {
+  const btn = event?.target;
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+  try {
+    const out = await api('/api/address-book/sync', 'POST', {});
+    const parts = [];
+    if (out.apple?.upserted != null) parts.push(`Apple: +${out.apple.upserted}`);
+    for (const g of (out.google || [])) {
+      if (g.ok) parts.push(`${g.account}: +${g.upserted}`);
+      else      parts.push(`${g.account}: ${g.error}`);
+    }
+    if (out.needs_reauth?.length) parts.push(`reconnect needed: ${out.needs_reauth.join(', ')}`);
+    toast(parts.join(' · ') || 'Sync done');
+    await loadAddressBook();
+  } catch (e) { toast(e.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = 'Sync'; } }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1117,16 +1965,54 @@ function renderEventDetail(ev, brief) {
         ${attHtml}
       </div>` : ''}
 
+      <div class="card" id="event-agenda-card">
+        <h3><span>Agenda</span>
+          <span class="timestamp" id="event-agenda-count"></span>
+        </h3>
+        <div id="event-agenda-list" class="agenda-list"></div>
+        <div class="agenda-add">
+          <input type="text" id="event-agenda-input" placeholder="Add something to cover in this meeting…"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();addEventAgenda('${esc(ev.id)}')}" />
+          <button class="btn small" onclick="addEventAgenda('${esc(ev.id)}')">Add</button>
+        </div>
+      </div>
+
       <div class="card">
         <h3>
-          <span>Meeting prep briefing</span>
+          <span>Meeting prep</span>
+          <span class="timestamp">reflects only what you've written</span>
+        </h3>
+        <div class="insight-empty" style="margin-bottom:12px">
+          Summarises your agenda items, per-person profiles, and Gloss notes into a gentle reminder before the meeting.
+        </div>
+        <button class="btn" onclick="openPrepModal('${esc(ev.id)}', ${JSON.stringify(ev.title || '').replace(/"/g, '&quot;')})">
+          Generate meeting prep
+        </button>
+      </div>
+
+      <div class="card">
+        <h3>
+          <span>Conversation playbook</span>
+          <span class="timestamp">framework-based walk-through</span>
+        </h3>
+        <div class="insight-empty" style="margin-bottom:12px">
+          Pre-walk this meeting through a named model — Challenger, SPIN, GROW, Radical Candor, NVC, and more. Shows how each stage could play out with these specific people.
+        </div>
+        <button class="btn" onclick="openPlaybookModal('${esc(ev.id)}', ${JSON.stringify(ev.title || '').replace(/"/g, '&quot;')})">
+          Open playbook
+        </button>
+      </div>
+
+      <div class="card">
+        <h3>
+          <span>Gloss-backed briefing</span>
           <span class="timestamp">${brief ? ('generated ' + esc(daysAgo(brief.generated_at))) : ''}</span>
         </h3>
         <div id="brief-body" class="brief-body">
           ${brief ? renderMd(brief.brief) : '<div class="insight-empty">No briefing yet.</div>'}
         </div>
         <div style="margin-top:14px">
-          <button class="btn" id="brief-btn" onclick="regenBrief('${esc(ev.id)}')">
+          <button class="btn ghost small" id="brief-btn" onclick="regenBrief('${esc(ev.id)}')">
             ${brief ? 'Regenerate briefing' : 'Prepare briefing'}
           </button>
         </div>
@@ -1134,6 +2020,195 @@ function renderEventDetail(ev, brief) {
     </div>
   `;
   document.getElementById('calendar-body').innerHTML = html;
+  loadEventAgenda(ev.id);
+}
+
+// ─── Event-scoped agenda + meeting prep ───────────────────────────────────
+async function loadEventAgenda(eventId) {
+  try {
+    const { items } = await api(`/api/agenda/event/${encodeURIComponent(eventId)}`);
+    renderAgendaList('event-agenda-list', 'event-agenda-count', items, () => loadEventAgenda(eventId));
+  } catch (e) { console.warn('[agenda/event]', e.message); }
+}
+
+async function addEventAgenda(eventId) {
+  const input = document.getElementById('event-agenda-input');
+  const content = input.value.trim();
+  if (!content) return;
+  input.value = '';
+  try {
+    await api('/api/agenda', 'POST', { scope_type: 'event', scope_id: eventId, content });
+    loadEventAgenda(eventId);
+  } catch (e) { alert(e.message); }
+}
+
+async function openPrepModal(eventId, title) {
+  state.prepEventId = eventId;
+  document.getElementById('prep-event-title').textContent = title || '';
+  document.getElementById('prep-body').innerHTML = '<div class="insight-empty">Generating…</div>';
+  openModal('prep-modal');
+  try {
+    const { prep } = await api(`/api/calendar/events/${encodeURIComponent(eventId)}/prep`, 'POST', {});
+    document.getElementById('prep-body').innerHTML = renderMd(prep);
+  } catch (e) {
+    document.getElementById('prep-body').innerHTML = `<div class="insight-empty">${esc(e.message)}</div>`;
+  }
+}
+
+async function regenPrep() {
+  if (!state.prepEventId) return;
+  const btn = document.getElementById('prep-regen-btn');
+  btn.disabled = true; btn.textContent = 'Regenerating…';
+  document.getElementById('prep-body').innerHTML = '<div class="insight-empty">Regenerating…</div>';
+  try {
+    const { prep } = await api(`/api/calendar/events/${encodeURIComponent(state.prepEventId)}/prep`, 'POST', {});
+    document.getElementById('prep-body').innerHTML = renderMd(prep);
+  } catch (e) {
+    document.getElementById('prep-body').innerHTML = `<div class="insight-empty">${esc(e.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Regenerate';
+  }
+}
+
+// ─── Playbook (framework-based meeting walk-through) ──────────────────────
+async function loadPlaybookModels() {
+  try {
+    const { models } = await api('/api/playbook/models');
+    const sel = document.getElementById('playbook-model-select');
+    const currentVal = sel.value;
+    sel.innerHTML = models.map(m => {
+      const tag = m.builtin === false ? ' ✎' : '';
+      return `<option value="${esc(m.key)}">${esc(m.label)}${tag}</option>`;
+    }).join('');
+    if (currentVal && [...sel.options].some(o => o.value === currentVal)) sel.value = currentVal;
+  } catch (e) { console.warn('[playbook/models]', e.message); }
+}
+
+async function openPlaybookModal(eventId, title) {
+  state.playbookEventId = eventId;
+  document.getElementById('playbook-event-title').textContent = title || '';
+  document.getElementById('playbook-body').innerHTML =
+    '<div class="insight-empty">Pick a framework and click Generate.</div>';
+  openModal('playbook-modal');
+  await loadPlaybookModels();
+}
+
+// ─── Custom framework manager ─────────────────────────────────────────────
+async function openPlaybookManager() {
+  openModal('playbook-manager-modal');
+  resetPlaybookForm();
+  await refreshPlaybookCustomList();
+}
+
+async function refreshPlaybookCustomList() {
+  const host = document.getElementById('playbook-custom-list');
+  try {
+    const { models } = await api('/api/playbook/custom');
+    if (!models.length) {
+      host.innerHTML = '<div class="insight-empty">No custom frameworks yet. Add one below.</div>';
+      return;
+    }
+    host.innerHTML = models.map(m => `
+      <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600">${esc(m.label)}</div>
+          <div class="timestamp" style="font-family:monospace">${esc(m.key)}</div>
+          <div class="insight-empty" style="margin-top:4px;white-space:pre-wrap">${esc((m.blurb || '').slice(0, 220))}${(m.blurb || '').length > 220 ? '…' : ''}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <button class="btn ghost small" onclick="editPlaybookCustom('${esc(m.key)}')">Edit</button>
+          <button class="btn ghost small" onclick="deletePlaybookCustom('${esc(m.key)}')">Delete</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    host.innerHTML = `<div class="insight-empty">${esc(e.message)}</div>`;
+  }
+}
+
+function resetPlaybookForm() {
+  document.getElementById('playbook-form-title').textContent = 'Add a framework';
+  document.getElementById('playbook-form-original-key').value = '';
+  document.getElementById('playbook-form-label').value = '';
+  document.getElementById('playbook-form-key').value = '';
+  document.getElementById('playbook-form-blurb').value = '';
+  document.getElementById('playbook-form-cancel-btn').style.display = 'none';
+  document.getElementById('playbook-form-save-btn').textContent = 'Save framework';
+}
+
+async function editPlaybookCustom(key) {
+  try {
+    const { models } = await api('/api/playbook/custom');
+    const m = (models || []).find(x => x.key === key);
+    if (!m) return;
+    document.getElementById('playbook-form-title').textContent = `Edit "${m.label}"`;
+    document.getElementById('playbook-form-original-key').value = m.key;
+    document.getElementById('playbook-form-label').value = m.label;
+    document.getElementById('playbook-form-key').value = m.key;
+    document.getElementById('playbook-form-blurb').value = m.blurb;
+    document.getElementById('playbook-form-cancel-btn').style.display = '';
+    document.getElementById('playbook-form-save-btn').textContent = 'Save changes';
+  } catch (e) { alert(e.message); }
+}
+
+async function savePlaybookForm() {
+  const originalKey = document.getElementById('playbook-form-original-key').value.trim();
+  const label = document.getElementById('playbook-form-label').value.trim();
+  let key = document.getElementById('playbook-form-key').value.trim().toLowerCase();
+  const blurb = document.getElementById('playbook-form-blurb').value.trim();
+
+  if (!label) { alert('Label is required.'); return; }
+  if (!blurb) { alert('Blurb is required.'); return; }
+  if (!key) key = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+  if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(key)) {
+    alert('Key must be a lowercase slug (letters, digits, dashes), 2–64 chars.');
+    return;
+  }
+
+  const btn = document.getElementById('playbook-form-save-btn');
+  btn.disabled = true;
+  try {
+    if (originalKey) {
+      await api(`/api/playbook/custom/${encodeURIComponent(originalKey)}`, 'PUT', { key, label, blurb });
+    } else {
+      await api('/api/playbook/custom', 'POST', { key, label, blurb });
+    }
+    resetPlaybookForm();
+    await refreshPlaybookCustomList();
+    await loadPlaybookModels();
+  } catch (e) { alert(e.message); }
+  finally { btn.disabled = false; }
+}
+
+async function deletePlaybookCustom(key) {
+  if (!confirm(`Delete custom framework "${key}"?`)) return;
+  try {
+    await api(`/api/playbook/custom/${encodeURIComponent(key)}`, 'DELETE');
+    await refreshPlaybookCustomList();
+    await loadPlaybookModels();
+  } catch (e) { alert(e.message); }
+}
+
+async function regenPlaybook() {
+  if (!state.playbookEventId) return;
+  const sel = document.getElementById('playbook-model-select');
+  const model = sel.value || 'auto';
+  const btn = document.getElementById('playbook-gen-btn');
+  btn.disabled = true; btn.textContent = 'Generating…';
+  document.getElementById('playbook-body').innerHTML =
+    '<div class="insight-empty">Generating…</div>';
+  try {
+    const { playbook } = await api(
+      `/api/calendar/events/${encodeURIComponent(state.playbookEventId)}/playbook`,
+      'POST', { model }
+    );
+    document.getElementById('playbook-body').innerHTML = renderMd(playbook);
+  } catch (e) {
+    document.getElementById('playbook-body').innerHTML =
+      `<div class="insight-empty">${esc(e.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Generate';
+  }
 }
 
 function selectContactFromEvent(name) {
@@ -1413,10 +2488,13 @@ async function loadSettingsStatus() {
       ? `${new Date(s.calendar.last_synced).toLocaleString()} · ${s.calendar.upcoming_count || 0} upcoming`
       : '—';
     const glossLabel = s.gloss?.last_pushed
-      ? `${new Date(s.gloss.last_pushed).toLocaleString()} · ${s.gloss.priority || 0} priority / ${s.gloss.total || 0} total`
-      : (s.gloss?.total ? `${s.gloss.total} cached` : 'never');
+      ? `${new Date(s.gloss.last_pushed).toLocaleString()} · ${s.gloss.priority || 0} priority / ${s.gloss.total || 0} contacts · ${s.gloss.notes || 0} notes`
+      : (s.gloss?.total ? `${s.gloss.total} cached` : 'never pushed — set up Gloss→Comms sync');
     const totals = s.totals || {};
+    const msgOk = (totals.total_messages || 0) > 0;
+    const msgStatus = msgOk ? '✓ collecting' : '✗ no messages yet — grant Full Disk Access in System Settings → Privacy & Security';
     el.innerHTML = `
+      <div class="st-row"><span class="k">iMessage access</span><span class="v" style="color:${msgOk ? 'var(--green)' : 'var(--red)'}">${esc(msgStatus)}</span></div>
       <div class="st-row"><span class="k">Last collection</span><span class="v">${esc(lastLabel)}</span></div>
       <div class="st-row"><span class="k">Calendar sync</span><span class="v">${esc(calLabel)}</span></div>
       <div class="st-row"><span class="k">Gloss push</span><span class="v">${esc(glossLabel)}</span></div>
@@ -1438,7 +2516,11 @@ async function removeAccount(id, email) {
   } catch (e) { toast('Failed: ' + e.message, 'err'); }
 }
 
-function openModal(id) { document.getElementById(id).classList.add('show'); loadAccounts(); }
+function openModal(id) {
+  document.getElementById(id).classList.add('show');
+  loadAccounts();
+  if (id === 'settings-modal') loadCalendarSettings();
+}
 function closeModal(id) { document.getElementById(id).classList.remove('show'); }
 
 document.getElementById('settings-btn').addEventListener('click', () => openModal('settings-modal'));
@@ -1537,6 +2619,22 @@ document.addEventListener('click', (e) => {
   if (!searchResults.contains(e.target) && e.target !== searchInput) closeSearchDropdown();
 });
 
+// Force external links (Gmail, Gloss, any absolute http(s) URL) to open in the
+// user's default browser rather than the Comms PWA shell. Safari/Chrome PWAs
+// often intercept target="_blank" anchors and open them in-app — and some
+// shells strip the URL fragment on external handoff, which is why Gloss note
+// links were landing on the index rather than the specific page. Invoking
+// window.open explicitly preserves the full href and routes to the default
+// browser on macOS/iOS.
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[target="_blank"]');
+  if (!a) return;
+  const href = a.getAttribute('href');
+  if (!href || href.startsWith('#')) return;
+  e.preventDefault();
+  window.open(href, '_blank', 'noopener,noreferrer');
+});
+
 // Keyboard: / focuses search, Esc closes
 window.addEventListener('keydown', (e) => {
   if (e.key === '/' && document.activeElement.tagName !== 'INPUT') {
@@ -1551,6 +2649,206 @@ window.addEventListener('keydown', (e) => {
     if (document.body.classList.contains('detail-open')) closeContactDetail();
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Calendar settings — which calendars to sync
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadCalendarSettings() {
+  const el = document.getElementById('calendar-settings-list');
+  if (!el) return;
+  try {
+    const [{ accounts }, { settings: enabled }] = await Promise.all([
+      api('/api/calendar/list'),
+      api('/api/settings'),
+    ]);
+    if (!accounts || !accounts.length) {
+      el.textContent = 'No calendar accounts connected.';
+      return;
+    }
+    let html = '';
+    for (const acct of accounts) {
+      html += `<div style="margin-bottom:8px"><div style="font-weight:600;margin-bottom:4px;color:var(--text)">${esc(acct.email)}</div>`;
+      for (const cal of acct.calendars || []) {
+        const enabledIds = enabled[acct.email] || ['primary'];
+        const checked = cal.primary || enabledIds.includes(cal.id) ? 'checked' : '';
+        const disabled = cal.primary ? 'disabled' : '';
+        const dot = cal.backgroundColor ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${esc(cal.backgroundColor)};margin-right:5px"></span>` : '';
+        html += `<label style="display:flex;align-items:center;gap:6px;padding:3px 0;cursor:${cal.primary ? 'default' : 'pointer'}">
+          <input type="checkbox" ${checked} ${disabled} onchange="toggleCalendar(${JSON.stringify(acct.email)},${JSON.stringify(cal.id)},this.checked)" />
+          ${dot}${esc(cal.summary)}${cal.primary ? ' <span style="color:var(--muted)">(primary)</span>' : ''}
+        </label>`;
+      }
+      html += `</div>`;
+    }
+    el.innerHTML = html;
+  } catch (e) {
+    el.textContent = 'Could not load calendars: ' + e.message;
+  }
+}
+
+async function toggleCalendar(email, calId, enabled) {
+  try {
+    const { settings } = await api('/api/settings');
+    const cur = settings[email] || ['primary'];
+    const next = enabled ? [...new Set([...cur, calId])] : cur.filter(id => id !== calId && id !== 'primary').concat(['primary']);
+    await api('/api/settings', 'PUT', { key: 'enabled_calendars', value: { ...settings, [email]: next } });
+  } catch (e) { toast('Failed to save calendar setting: ' + e.message, 'err'); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Dates view — birthdays, anniversaries, special days
+// ═══════════════════════════════════════════════════════════════════════════
+const DATE_TYPE_META = {
+  birthday:    { label: 'Birthday',     color: 'var(--accent)',   draft: true },
+  anniversary: { label: 'Anniversary',  color: 'var(--gold)',     draft: true },
+  death:       { label: 'In memory',    color: 'var(--muted)',    draft: false },
+  memorial:    { label: 'Memorial',     color: 'var(--red)',      draft: false },
+  custom:      { label: 'Special day',  color: 'var(--text-dim)', draft: false },
+};
+
+async function loadDates() {
+  const el = document.getElementById('dates-body');
+  if (!el) return;
+  el.innerHTML = '<div style="padding:40px 0;color:var(--muted);text-align:center;font-size:13px">Loading…</div>';
+  try {
+    const { dates } = await api('/api/upcoming-special-dates?days=90');
+    const countEl = document.getElementById('count-dates');
+    if (countEl) countEl.textContent = dates.length || '';
+    if (!dates.length) {
+      el.innerHTML = '<div style="padding:40px 0;color:var(--muted);text-align:center;font-size:13px">No upcoming dates in the next 90 days.<br><br><button class="btn ghost small" onclick="openAddDateModal()">+ Add one</button></div>';
+      return;
+    }
+    el.innerHTML = dates.map(d => renderDateCard(d)).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="padding:40px 0;color:var(--red);text-align:center;font-size:13px">' + esc(e.message) + '</div>';
+  }
+}
+
+function renderDateCard(d) {
+  const meta = DATE_TYPE_META[d.type] || DATE_TYPE_META.custom;
+  const label = d.label || meta.label;
+  const daysText = d.days_until === 0 ? 'Today!' : d.days_until === 1 ? 'Tomorrow' : `In ${d.days_until} days`;
+  const yearText = d.year && d.year > 1900 && d.type === 'birthday' ? ` · turning ${new Date().getFullYear() - d.year}` : '';
+  const contactHtml = d.contact
+    ? `<span class="chip" style="cursor:pointer" onclick="setView('contacts');loadContactDetail(${JSON.stringify(d.contact).replace(/"/g,'&quot;')})">${esc(d.contact)}</span>`
+    : '';
+  const draftBtn = meta.draft && d.contact
+    ? `<button class="btn ghost small" onclick="openDraftModal(${JSON.stringify(d.contact).replace(/"/g,'&quot;')},${JSON.stringify(d.type).replace(/"/g,'&quot;')})">Draft</button>`
+    : '';
+  const deleteBtn = d.source === 'manual'
+    ? `<button class="btn ghost small" style="color:var(--muted)" onclick="confirmDeleteDate(${JSON.stringify(d.id)})">Delete</button>`
+    : '';
+  const memStyle = (d.type === 'death' || d.type === 'memorial') ? 'font-style:italic;opacity:0.8' : '';
+  return `<div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-bottom:1px solid var(--border);${memStyle}">
+    <div style="min-width:72px;text-align:right">
+      <div style="font-size:18px;font-weight:700;color:var(--text)">${esc(daysText)}</div>
+    </div>
+    <div style="flex:1;min-width:0">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="font-size:11px;font-weight:600;color:${meta.color};text-transform:uppercase;letter-spacing:.04em">${esc(label)}</span>
+        ${contactHtml}
+        <span style="color:var(--muted);font-size:12px">${esc(yearText)}</span>
+      </div>
+      ${d.notes ? `<div style="font-size:12px;color:var(--text-dim);margin-top:3px">${esc(d.notes)}</div>` : ''}
+    </div>
+    <div style="display:flex;gap:6px;flex-shrink:0">${draftBtn}${deleteBtn}</div>
+  </div>`;
+}
+
+function openAddDateModal() {
+  document.getElementById('add-date-type').value = 'birthday';
+  document.getElementById('add-date-contact').value = '';
+  document.getElementById('add-date-label').value = '';
+  document.getElementById('add-date-month').value = '';
+  document.getElementById('add-date-day').value = '';
+  document.getElementById('add-date-year').value = '';
+  document.getElementById('add-date-notes').value = '';
+  // Populate contact datalist
+  const dl = document.getElementById('add-date-contact-list');
+  if (dl && state.contacts) {
+    dl.innerHTML = state.contacts.map(c => `<option value="${esc(c.contact)}">`).join('');
+  }
+  openModal('add-date-modal');
+}
+
+async function saveSpecialDate() {
+  const type    = document.getElementById('add-date-type').value;
+  const contact = document.getElementById('add-date-contact').value.trim() || null;
+  const label   = document.getElementById('add-date-label').value.trim() || null;
+  const month   = parseInt(document.getElementById('add-date-month').value, 10);
+  const day     = parseInt(document.getElementById('add-date-day').value, 10);
+  const year    = parseInt(document.getElementById('add-date-year').value, 10) || null;
+  const notes   = document.getElementById('add-date-notes').value.trim() || null;
+  if (!month || !day) { toast('Month and day are required', 'err'); return; }
+  if (type === 'custom' && !label) { toast('Label is required for Custom type', 'err'); return; }
+  try {
+    await api('/api/special-dates', 'POST', { type, contact, label, month, day, year, notes });
+    closeModal('add-date-modal');
+    toast('Saved');
+    if (state.view === 'dates') loadDates();
+  } catch (e) { toast('Failed: ' + e.message, 'err'); }
+}
+
+async function confirmDeleteDate(id) {
+  if (!confirm('Delete this date?')) return;
+  try {
+    await api('/api/special-dates/' + encodeURIComponent(id), 'DELETE');
+    toast('Deleted');
+    loadDates();
+  } catch (e) { toast('Failed: ' + e.message, 'err'); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Draft message modal
+// ═══════════════════════════════════════════════════════════════════════════
+let _draftContact = null;
+let _draftOccasion = null;
+
+async function openDraftModal(contact, occasion) {
+  _draftContact = contact;
+  _draftOccasion = occasion;
+  document.getElementById('draft-contact-label').textContent = contact + ' · ' + occasion;
+  document.getElementById('draft-body').innerHTML = '<div class="insight-empty">Generating…</div>';
+  document.getElementById('draft-copy-btn').style.display = 'none';
+  openModal('draft-modal');
+  await fetchDraft();
+}
+
+async function fetchDraft() {
+  try {
+    const { template } = await api(`/api/contacts/${encodeURIComponent(_draftContact)}/message-template`, 'POST', { occasion: _draftOccasion });
+    renderDraft(template);
+  } catch (e) {
+    document.getElementById('draft-body').innerHTML = `<div style="color:var(--red);font-size:13px">${esc(e.message)}</div>`;
+  }
+}
+
+function renderDraft(t) {
+  const channelColor = t.channel === 'text' ? 'var(--accent)' : 'var(--gold)';
+  const channelLabel = t.channel === 'text' ? 'iMessage' : 'Email';
+  let html = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+    <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:${channelColor}">${esc(channelLabel)}</span>
+    <span style="font-size:12px;color:var(--muted)">${esc(t.rationale || '')}</span>
+  </div>`;
+  if (t.channel === 'email' && t.subject) {
+    html += `<div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:8px;padding:4px 8px;background:var(--surface);border-radius:4px">Subject: ${esc(t.subject)}</div>`;
+  }
+  html += `<div style="white-space:pre-wrap;font-size:14px;line-height:1.6;padding:12px;background:var(--surface);border-radius:8px;border:1px solid var(--border)">${esc(t.draft || '')}</div>`;
+  document.getElementById('draft-body').innerHTML = html;
+  document.getElementById('draft-copy-btn').style.display = '';
+  document.getElementById('draft-copy-btn').dataset.draft = t.draft || '';
+}
+
+async function regenDraft() {
+  document.getElementById('draft-body').innerHTML = '<div class="insight-empty">Generating…</div>';
+  document.getElementById('draft-copy-btn').style.display = 'none';
+  await fetchDraft();
+}
+
+function copyDraft() {
+  const text = document.getElementById('draft-copy-btn').dataset.draft || '';
+  navigator.clipboard.writeText(text).then(() => toast('Copied')).catch(() => toast('Copy failed', 'err'));
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Boot
@@ -1569,7 +2867,7 @@ window.addEventListener('keydown', (e) => {
 
   // Initial view from hash
   const h = location.hash.replace(/^#\//, '').split('/')[0];
-  if (h && ['contacts','calendar','daily'].includes(h)) setView(h);
+  if (h && ['contacts','calendar','dates','address-book','daily'].includes(h)) setView(h);
   else setView('contacts');
 
   // Refresh nudges periodically

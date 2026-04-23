@@ -10,13 +10,14 @@ function redirectUri() {
   return `${origin.replace(/\/+$/, '')}/api/gmail/callback`;
 }
 
-// Gmail (read-only) plus Calendar (read-only). Google will ask the user to
-// approve both at once on first connect. Existing accounts with gmail-only
-// scope keep working; they just won't surface in calendar views until they
-// reconnect.
+// Gmail (read-only), Calendar (read-only), and Contacts (read-only). Google
+// will ask the user to approve all three at once on first connect. Existing
+// accounts keep working with whatever scope they last consented to; they
+// just won't surface in views that need a scope until they reconnect.
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/calendar.readonly',
+  'https://www.googleapis.com/auth/contacts.readonly',
 ];
 
 function makeClient() {
@@ -104,7 +105,14 @@ async function fetchEmailsForDate(tokenJson, date) {
           const subject = h('subject') || '(no subject)';
 
           const emailAddress = extractEmail(rawContact);
-          if (contact) emails.push({ direction, contact, emailAddress, subject, snippet: detail.data.snippet || null });
+          if (contact) emails.push({
+            direction,
+            contact,
+            emailAddress,
+            subject,
+            snippet: detail.data.snippet || null,
+            threadId: detail.data.threadId || msg.threadId || null,
+          });
         } catch (err) {
           console.warn(`[gmail] message fetch error: ${err.message}`);
         }
