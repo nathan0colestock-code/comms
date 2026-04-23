@@ -850,6 +850,80 @@ app.post('/api/people/rebuild', (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Email helper ──────────────────────────────────────────────────────────
+// Scheduled 8am + noon inbox triage: classify each unread thread, draft
+// replies for real-person threads, queue unsubscribable senders for weekly
+// review, optionally archive bulk/transactional. See email-helper.js.
+const { runEmailHelper } = require('./email-helper');
+
+function openHelperDb() {
+  const Database = require('better-sqlite3');
+  const db = new Database(DB_PATH);
+  db.pragma('foreign_keys = ON');
+  return db;
+}
+
+// Manual trigger — used by tests and the "Run now" button in the UI.
+app.post('/api/email-helper/run', async (req, res) => {
+  const db = openHelperDb();
+  try {
+    const out = await runEmailHelper({ db, getGmailAccountsWithTokens, saveGmailTokens });
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  } finally {
+    db.close();
+  }
+});
+
+app.get('/api/email-helper/runs', (req, res) => {
+  const db = openHelperDb();
+  try {
+    const rows = db.prepare(
+      `SELECT id, started_at, ended_at, summary_json FROM email_helper_runs
+       ORDER BY started_at DESC LIMIT 20`
+    ).all();
+    res.json(rows.map(r => ({
+      id: r.id, started_at: r.started_at, ended_at: r.ended_at,
+      summary: r.summary_json ? JSON.parse(r.summary_json) : null,
+    })));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  } finally {
+    db.close();
+  }
+});
+
+app.get('/api/email-helper/unsubscribes', (req, res) => {
+  const db = openHelperDb();
+  try {
+    const status = (req.query.status || 'pending').toString();
+    const rows = db.prepare(
+      `SELECT * FROM email_unsub_queue WHERE status = ? ORDER BY created_at DESC LIMIT 200`
+    ).all(status);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  } finally {
+    db.close();
+  }
+});
+
+// Mark an unsubscribe-queue item approved (user intends to unsubscribe — we
+// don't auto-click the URL; user hits the stored list_unsubscribe link in
+// their own browser) or dismissed (keep subscribed).
+app.post('/api/email-helper/unsubscribes/:id/:action', (req, res) => {
+  const { id, action } = req.params;
+  if (!['approve', 'dismiss'].includes(action)) return res.status(400).json({ error: 'action must be approve or dismiss' });
+  const db = openHelperDb();
+  try {
+    db.prepare(
+      `UPDATE email_unsub_queue SET status = ?, actioned_at = datetime('now') WHERE id = ?`
+    ).run(action === 'approve' ? 'approved' : 'dismissed', id);
+    res.json({ ok: true });
+  } finally { db.close(); }
+});
+
 app.post('/api/address-book/sync/apple', async (req, res) => {
   try {
     const { importAppleContacts } = require('./apple-contacts');
@@ -1014,6 +1088,28 @@ if (require.main === module) {
       }
     }).catch(() => {}));
     setInterval(() => { pollAddressBook().catch(() => {}); }, 6 * 60 * 60 * 1000);
+
+    // Email helper: fire at 08:00 and 12:00 local time, once per firing hour.
+    // Idempotent guard: lastEmailHelperFire stores "YYYY-MM-DD-HH" of the last
+    // run so a restart in the middle of 08:xx doesn't re-fire.
+    let lastEmailHelperFire = null;
+    const emailHelperHours = (process.env.EMAIL_HELPER_HOURS || '8,12')
+      .split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n));
+    if (emailHelperHours.length) {
+      console.log(`[email-helper] scheduled at ${emailHelperHours.map(h => `${h}:00`).join(', ')} local`);
+      setInterval(() => {
+        const now = new Date();
+        if (!emailHelperHours.includes(now.getHours())) return;
+        const key = `${now.toISOString().slice(0, 10)}-${now.getHours()}`;
+        if (lastEmailHelperFire === key) return;
+        lastEmailHelperFire = key;
+        const db = openHelperDb();
+        runEmailHelper({ db, getGmailAccountsWithTokens, saveGmailTokens })
+          .then(r => console.log(`[email-helper] run ${r.id}: ${JSON.stringify(r.totals)}`))
+          .catch(err => console.warn('[email-helper] run error:', err.message))
+          .finally(() => db.close());
+      }, 5 * 60 * 1000); // poll every 5 min
+    }
   });
 }
 
