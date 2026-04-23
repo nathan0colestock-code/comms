@@ -75,14 +75,15 @@ function openDb() {
     );
 
     CREATE TABLE IF NOT EXISTS emails (
-      id        TEXT PRIMARY KEY,
-      run_id    TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-      date      TEXT NOT NULL,
-      direction TEXT NOT NULL,
-      contact   TEXT NOT NULL,
-      subject   TEXT,
-      snippet   TEXT,
-      account   TEXT
+      id           TEXT PRIMARY KEY,
+      run_id       TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      date         TEXT NOT NULL,
+      direction    TEXT NOT NULL,
+      contact      TEXT NOT NULL,
+      email_address TEXT,
+      subject      TEXT,
+      snippet      TEXT,
+      account      TEXT
     );
 
     -- Legacy tables kept for DB compat; no longer written
@@ -113,9 +114,10 @@ function openDb() {
     CREATE INDEX IF NOT EXISTS idx_emails_date   ON emails(date);
   `);
 
-  // Migration: add snippet to emails if not present
+  // Migrations for emails table
   const emailCols = db.pragma('table_info(emails)').map(c => c.name);
-  if (!emailCols.includes('snippet')) db.exec('ALTER TABLE emails ADD COLUMN snippet TEXT');
+  if (!emailCols.includes('snippet'))        db.exec('ALTER TABLE emails ADD COLUMN snippet TEXT');
+  if (!emailCols.includes('email_address'))  db.exec('ALTER TABLE emails ADD COLUMN email_address TEXT');
 
   return db;
 }
@@ -147,54 +149,96 @@ function runAppleScript(script, { timeout = 120_000 } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Contact name resolution via Contacts.app
+// Contact name resolution — reads AddressBook SQLite directly (Full Disk Access)
 // ---------------------------------------------------------------------------
+
+const AB_BASE = path.join(os.homedir(), 'Library', 'Application Support', 'AddressBook');
+
+// Strip non-digits; normalize US 11-digit (1xxxxxxxxxx) to 10-digit
+function normalizePhone(raw) {
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 11 && digits[0] === '1') return digits.slice(1);
+  return digits || null;
+}
+
+// Build phone→name and email→name maps from all AddressBook sources
+let _contactsCache = null;
+function getContactsMap() {
+  if (_contactsCache) return _contactsCache;
+
+  const phoneMap = new Map();
+  const emailMap = new Map();
+
+  const srcDir = path.join(AB_BASE, 'Sources');
+  const dbPaths = [];
+  if (fs.existsSync(srcDir)) {
+    for (const src of fs.readdirSync(srcDir)) {
+      const p = path.join(srcDir, src, 'AddressBook-v22.abcddb');
+      if (fs.existsSync(p)) dbPaths.push(p);
+    }
+  }
+  const mainDb = path.join(AB_BASE, 'AddressBook-v22.abcddb');
+  if (fs.existsSync(mainDb)) dbPaths.unshift(mainDb);
+
+  for (const dbPath of dbPaths) {
+    try {
+      const db = new Database(dbPath, { readonly: true, timeout: 3000 });
+      try {
+        const fullName = r =>
+          ([r.ZFIRSTNAME, r.ZLASTNAME].filter(Boolean).join(' ') || r.ZORGANIZATION || '').trim();
+
+        for (const row of db.prepare(`
+          SELECT r.ZFIRSTNAME, r.ZLASTNAME, r.ZORGANIZATION, p.ZFULLNUMBER
+          FROM ZABCDPHONENUMBER p JOIN ZABCDRECORD r ON r.Z_PK = p.ZOWNER
+          WHERE p.ZFULLNUMBER IS NOT NULL
+        `).all()) {
+          const name = fullName(row);
+          const norm = normalizePhone(row.ZFULLNUMBER);
+          if (name && norm) phoneMap.set(norm, name);
+        }
+
+        for (const row of db.prepare(`
+          SELECT r.ZFIRSTNAME, r.ZLASTNAME, r.ZORGANIZATION, e.ZADDRESSNORMALIZED
+          FROM ZABCDEMAILADDRESS e JOIN ZABCDRECORD r ON r.Z_PK = e.ZOWNER
+          WHERE e.ZADDRESSNORMALIZED IS NOT NULL
+        `).all()) {
+          const name = fullName(row);
+          if (name) emailMap.set(row.ZADDRESSNORMALIZED.toLowerCase(), name);
+        }
+      } finally { db.close(); }
+    } catch { /* skip inaccessible source */ }
+  }
+
+  _contactsCache = { phoneMap, emailMap };
+  return _contactsCache;
+}
+
+const AUTOMATED_EMAIL = /noreply|no[-.]reply|donotreply|notification|newsletter|mailer-daemon|postmaster|unsubscribe|marketing|bounce|automated|alert|digest|confirm|verify|welcome|updates@|news@|info@|support@|hello@|team@|billing@|invoice@|receipt@/i;
+
+// Keep email if: (a) sender is in Contacts, or (b) doesn't match automated patterns
+function isRealPersonEmail(emailAddress, emailMap) {
+  if (!emailAddress) return false;
+  if (emailMap.has(emailAddress)) return true;
+  if (AUTOMATED_EMAIL.test(emailAddress)) return false;
+  return true;
+}
 
 function resolveHandlesToNames(handles) {
   if (!handles.length) return {};
-
-  // Only attempt to resolve phone numbers (+digits) and email addresses,
-  // not display names (e.g. "Family Chat") which won't be in Contacts.
   const toResolve = [...new Set(handles)].filter(h => h && (/^\+?\d{5,}/.test(h) || h.includes('@')));
   if (!toResolve.length) return {};
 
-  const listStr = toResolve
-    .map(h => `"${h.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)
-    .join(', ');
-
-  const script = `
-set handleList to {${listStr}}
-set resultList to {}
-tell application "Contacts"
-  repeat with theHandle in handleList
-    set resolvedName to theHandle as text
-    try
-      set phonePeople to (every person whose value of phones contains (theHandle as text))
-      if (count of phonePeople) > 0 then
-        set resolvedName to name of item 1 of phonePeople
-      else
-        set emailPeople to (every person whose value of emails contains (theHandle as text))
-        if (count of emailPeople) > 0 then
-          set resolvedName to name of item 1 of emailPeople
-        end if
-      end if
-    end try
-    set end of resultList to ((theHandle as text) & "~~SEP~~" & resolvedName)
-  end repeat
-end tell
-set AppleScript's text item delimiters to "~~NL~~"
-return resultList as text`;
-
   try {
-    const raw = runAppleScript(script, { timeout: 60_000 });
+    const { phoneMap, emailMap } = getContactsMap();
     const result = {};
-    if (!raw) return result;
-    for (const pair of raw.split('~~NL~~')) {
-      const idx = pair.indexOf('~~SEP~~');
-      if (idx === -1) continue;
-      const handle = pair.slice(0, idx).trim();
-      const name   = pair.slice(idx + 7).trim();
-      if (handle) result[handle] = name || handle;
+    for (const handle of toResolve) {
+      if (handle.includes('@')) {
+        result[handle] = emailMap.get(handle.toLowerCase()) || handle;
+      } else {
+        const norm = normalizePhone(handle);
+        result[handle] = (norm && phoneMap.get(norm)) || handle;
+      }
     }
     return result;
   } catch (err) {
@@ -342,7 +386,10 @@ async function collect(date, { onProgress } = {}) {
       for (const account of accounts) {
         try {
           const { emails: accountEmails, refreshedTokens } = await fetchEmailsForDate(account.token_json, date);
-          for (const e of accountEmails) emails.push({ ...e, account: account.email });
+          const { emailMap } = getContactsMap();
+          for (const e of accountEmails) {
+            if (isRealPersonEmail(e.emailAddress, emailMap)) emails.push({ ...e, account: account.email });
+          }
           if (refreshedTokens) {
             const updated = { ...JSON.parse(account.token_json), ...refreshedTokens };
             db.prepare('UPDATE gmail_accounts SET token_json = ? WHERE id = ?')
@@ -366,9 +413,9 @@ async function collect(date, { onProgress } = {}) {
       }
       for (const e of emails) {
         db.prepare(`
-          INSERT INTO emails (id, run_id, date, direction, contact, subject, snippet, account)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(crypto.randomUUID(), runId, date, e.direction, e.contact, e.subject || null, e.snippet || null, e.account || null);
+          INSERT INTO emails (id, run_id, date, direction, contact, email_address, subject, snippet, account)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(crypto.randomUUID(), runId, date, e.direction, e.contact, e.emailAddress || null, e.subject || null, e.snippet || null, e.account || null);
       }
       db.prepare(`UPDATE runs SET status='done', messages_count=?, emails_count=? WHERE id=?`)
         .run(messages.length, emails.length, runId);

@@ -83,7 +83,8 @@ async function fetchEmailsForDate(tokenJson, date) {
           const contact = parseContact(rawContact);
           const subject = h('subject') || '(no subject)';
 
-          if (contact) emails.push({ direction, contact, subject, snippet: detail.data.snippet || null });
+          const emailAddress = extractEmail(rawContact);
+          if (contact) emails.push({ direction, contact, emailAddress, subject, snippet: detail.data.snippet || null });
         } catch (err) {
           console.warn(`[gmail] message fetch error: ${err.message}`);
         }
@@ -97,10 +98,16 @@ async function fetchEmailsForDate(tokenJson, date) {
   return { emails, refreshedTokens };
 }
 
-// "Jane Doe <jane@example.com>" → "Jane Doe", "jane@example.com" → "jane@example.com"
+// "Jane Doe <jane@example.com>" → "Jane Doe"
 function parseContact(raw) {
   const m = raw.match(/^(.+?)\s*<[^>]+>/);
   return (m ? m[1].replace(/^["']|["']$/g, '') : raw).trim();
+}
+
+// Extract bare email address from a header value
+function extractEmail(raw) {
+  const m = raw.match(/<([^>]+)>/);
+  return (m ? m[1] : raw.trim()).toLowerCase();
 }
 
 module.exports = { getAuthUrl, exchangeCode, getAccountEmail, fetchEmailsForDate };
