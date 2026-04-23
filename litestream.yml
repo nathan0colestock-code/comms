@@ -1,0 +1,10 @@
+dbs:
+  - path: /data/comms.db
+    replicas:
+      - type: s3
+        endpoint: ${R2_ENDPOINT}
+        bucket: nathan-suite-backups
+        path: comms/comms.db
+        region: auto
+        access-key-id: ${R2_ACCESS_KEY_ID}
+        secret-access-key: ${R2_SECRET_ACCESS_KEY}
