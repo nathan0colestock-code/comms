@@ -355,6 +355,17 @@ app.get('/api/debug/messages', (req, res) => res.json(testMessagesAccess()));
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ─── Gloss → Comms push (bearer token auth) ─────────────────────────────────
+// Debounce rebuildPeople() so a burst of pushes produces one rebuild, not N.
+// rebuildPeople is O(N × people²); running it per push was the bottleneck.
+let _rebuildPeopleTimer = null;
+function scheduleRebuildPeople(delayMs = 10000) {
+  if (_rebuildPeopleTimer) clearTimeout(_rebuildPeopleTimer);
+  _rebuildPeopleTimer = setTimeout(() => {
+    _rebuildPeopleTimer = null;
+    try { rebuildPeople(); } catch (e) { console.warn('[rebuildPeople after gloss push]', e.message); }
+  }, delayMs);
+}
+
 // Body: { contacts: [ {contact, aliases, gloss_id, gloss_url, mention_count,
 //   last_mentioned_at, priority, growth_note, recent_context, linked_collections}, ... ] }
 app.post('/api/gloss/contacts', (req, res) => {
@@ -367,7 +378,7 @@ app.post('/api/gloss/contacts', (req, res) => {
     try { upsertGlossContact(p); saved++; }
     catch (e) { errors.push({ contact: p?.contact, error: e.message }); }
   }
-  try { rebuildPeople(); } catch (e) { console.warn('[rebuildPeople after gloss push]', e.message); }
+  scheduleRebuildPeople();
   res.json({ ok: true, saved, errors });
 });
 
