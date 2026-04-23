@@ -37,10 +37,16 @@ after(async () => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-function req(urlPath, { headers = {}, method = 'GET' } = {}) {
+function req(urlPath, { headers = {}, method = 'GET', body: reqBody } = {}) {
   return new Promise((resolve, reject) => {
     const url = new URL(urlPath, baseUrl);
-    const options = { hostname: url.hostname, port: url.port, path: url.pathname, method, headers };
+    const payload = reqBody != null ? JSON.stringify(reqBody) : null;
+    const hdrs = { ...headers };
+    if (payload) {
+      hdrs['Content-Type'] = 'application/json';
+      hdrs['Content-Length'] = Buffer.byteLength(payload);
+    }
+    const options = { hostname: url.hostname, port: url.port, path: url.pathname, method, headers: hdrs };
     const r = http.request(options, res => {
       let body = '';
       res.on('data', chunk => { body += chunk; });
@@ -50,6 +56,7 @@ function req(urlPath, { headers = {}, method = 'GET' } = {}) {
       });
     });
     r.on('error', reject);
+    if (payload) r.write(payload);
     r.end();
   });
 }
@@ -92,11 +99,34 @@ describe('authentication', () => {
 // ---------------------------------------------------------------------------
 
 describe('GET /api/status', () => {
-  it('returns ok and db path', async () => {
+  it('returns ok, db path, and overview fields', async () => {
     const { status, body } = await req('/api/status', { headers: AUTH });
     assert.equal(status, 200);
     assert.equal(body.ok, true);
     assert.ok(typeof body.db === 'string');
+    // Overview fields
+    assert.ok(body.totals && typeof body.totals.total_messages === 'number');
+    assert.ok(body.calendar && typeof body.calendar.upcoming_count === 'number');
+    assert.ok(body.gloss && typeof body.gloss.total === 'number');
+    assert.ok(typeof body.gmail_accounts === 'number');
+  });
+});
+
+describe('GET /api/search', () => {
+  it('returns empty arrays for a blank query', async () => {
+    const { status, body } = await req('/api/search?q=', { headers: AUTH });
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(body.messages));
+    assert.ok(Array.isArray(body.emails));
+    assert.ok(Array.isArray(body.contacts));
+  });
+
+  it('returns empty arrays when there is no data', async () => {
+    const { status, body } = await req('/api/search?q=xyzzy', { headers: AUTH });
+    assert.equal(status, 200);
+    assert.equal(body.messages.length, 0);
+    assert.equal(body.emails.length, 0);
+    assert.equal(body.contacts.length, 0);
   });
 });
 
@@ -125,5 +155,52 @@ describe('GET /api/gmail/accounts', () => {
     const { status, body } = await req('/api/gmail/accounts', { headers: AUTH });
     assert.equal(status, 200);
     assert.ok(Array.isArray(body));
+  });
+});
+
+describe('POST /api/gloss/contacts', () => {
+  it('rejects a body that is neither { contacts: [] } nor an array', async () => {
+    const { status } = await req('/api/gloss/contacts', {
+      method: 'POST', headers: AUTH, body: { not_contacts: [] },
+    });
+    assert.equal(status, 400);
+  });
+
+  it('accepts the documented contract shape and persists a row', async () => {
+    const payload = {
+      contacts: [{
+        contact: 'Push Contract Person',
+        aliases: ['Pushy'],
+        gloss_id: 'gloss-xyz-1',
+        gloss_url: 'http://localhost:3747/#/index/person/gloss-xyz-1',
+        mention_count: 3,
+        last_mentioned_at: '2026-04-20',
+        priority: 2,
+        growth_note: 'Check in monthly',
+        recent_context: [
+          { date: '2026-04-18', role_summary: 'mentioned re: the retreat', collection: 'Formation' },
+        ],
+        linked_collections: ['Formation', 'Rhythms'],
+      }],
+    };
+    const { status, body } = await req('/api/gloss/contacts', {
+      method: 'POST', headers: AUTH, body: payload,
+    });
+    assert.equal(status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.saved, 1);
+
+    // Round-trip: the contact now shows up on /api/contacts/:name.
+    const detail = await req('/api/contacts/' + encodeURIComponent('Push Contract Person'), { headers: AUTH });
+    assert.equal(detail.status, 200);
+    assert.ok(detail.body.gloss);
+    assert.equal(detail.body.gloss.priority, 2);
+    // recent_context objects must be preserved through the round-trip.
+    assert.ok(Array.isArray(detail.body.gloss.recent_context));
+    assert.equal(detail.body.gloss.recent_context[0].role_summary, 'mentioned re: the retreat');
+    assert.equal(detail.body.gloss.recent_context[0].collection, 'Formation');
+    // linked_collections must remain plain strings.
+    assert.ok(Array.isArray(detail.body.gloss.linked_collections));
+    assert.equal(typeof detail.body.gloss.linked_collections[0], 'string');
   });
 });
