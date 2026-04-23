@@ -127,6 +127,20 @@ describe('GET /api/overview', () => {
   });
 });
 
+describe('GET /api/sync-status', () => {
+  it('returns health, collection, gmail, calendar, contacts, and gloss fields', async () => {
+    const { status, body } = await req('/api/sync-status', { headers: AUTH });
+    assert.equal(status, 200);
+    assert.ok(['healthy', 'stale', 'error'].includes(body.health), 'health should be healthy/stale/error');
+    assert.ok(body.collection && typeof body.collection === 'object');
+    assert.ok(Array.isArray(body.collection.running_dates));
+    assert.ok(body.gmail && Array.isArray(body.gmail.accounts));
+    assert.ok(body.calendar && typeof body.calendar.upcoming_count === 'number');
+    assert.ok(Array.isArray(body.contacts));
+    assert.ok(body.gloss && typeof body.gloss.total === 'number');
+  });
+});
+
 describe('GET /api/search', () => {
   it('returns empty arrays for a blank query', async () => {
     const { status, body } = await req('/api/search?q=', { headers: AUTH });

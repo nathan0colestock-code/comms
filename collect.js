@@ -2951,6 +2951,95 @@ function getOverview() {
 }
 
 // ---------------------------------------------------------------------------
+// Sync status — consolidated view of all data-source sync states, used by
+// /api/sync-status.  The running_dates field is a placeholder; server.js
+// enriches it with in-memory job state before responding.
+// ---------------------------------------------------------------------------
+function getSyncStatus() {
+  const db = openDb();
+  try {
+    const lastSuccessRun = db.prepare(
+      `SELECT * FROM runs WHERE status='done' ORDER BY date DESC LIMIT 1`
+    ).get() || null;
+
+    const latestRun = db.prepare(
+      `SELECT * FROM runs ORDER BY date DESC LIMIT 1`
+    ).get() || null;
+
+    let daysSinceLast = null;
+    if (lastSuccessRun) {
+      const runDate = new Date(lastSuccessRun.date + 'T12:00:00Z');
+      daysSinceLast = Math.floor((Date.now() - runDate.getTime()) / 86400000);
+    }
+
+    const gmailAccounts = db.prepare(
+      `SELECT id, email FROM gmail_accounts ORDER BY rowid`
+    ).all();
+
+    const calRow = db.prepare(
+      `SELECT MAX(synced_at) AS last_synced, COUNT(*) AS upcoming_count FROM calendar_events WHERE date >= date('now')`
+    ).get() || {};
+
+    const contactSyncs = db.prepare(`
+      SELECT source, source_account, MAX(ran_at) AS ran_at, total, error
+      FROM address_book_sync_log
+      GROUP BY source, source_account
+      ORDER BY source, source_account
+    `).all();
+
+    const glossRow = db.prepare(
+      `SELECT MAX(synced_at) AS last_pushed, COUNT(*) AS total, SUM(CASE WHEN priority >= 1 THEN 1 ELSE 0 END) AS priority FROM gloss_contacts`
+    ).get() || {};
+
+    // Health: 'healthy' | 'stale' | 'error'
+    const now = Date.now();
+    let health = 'healthy';
+
+    if (!lastSuccessRun) {
+      health = 'stale';
+    } else if (daysSinceLast > 7) {
+      health = 'error';
+    } else if (daysSinceLast > 2) {
+      health = 'stale';
+    }
+
+    if (latestRun && latestRun.status === 'error' &&
+        (!lastSuccessRun || latestRun.date > lastSuccessRun.date)) {
+      health = 'error';
+    }
+
+    if (health !== 'error' && calRow.last_synced) {
+      const ageH = (now - new Date(calRow.last_synced).getTime()) / 3600000;
+      if (ageH > 6 && health === 'healthy') health = 'stale';
+    }
+
+    for (const s of contactSyncs) {
+      if (s.error && health === 'healthy') health = 'stale';
+    }
+
+    return {
+      collection: {
+        last_run: lastSuccessRun,
+        days_since_last: daysSinceLast,
+        running_dates: [], // enriched by server.js
+      },
+      gmail: { accounts: gmailAccounts },
+      calendar: {
+        last_synced: calRow.last_synced || null,
+        upcoming_count: calRow.upcoming_count || 0,
+      },
+      contacts: contactSyncs,
+      gloss: {
+        last_pushed: glossRow.last_pushed || null,
+        total: glossRow.total || 0,
+        priority: glossRow.priority || 0,
+      },
+      health,
+    };
+  } finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
 // Suite status metrics — a table-count rollup used by /api/status. Each count
 // is isolated in its own try/catch so a missing/renamed table never 500s the
 // health-check surface. Returns numbers (0 on error).
@@ -3041,7 +3130,7 @@ module.exports = {
   // Sent message style samples
   getRecentSentMessagesForStyle,
   // Overview + search
-  getOverview, getSuiteStatusMetrics, searchAll,
+  getOverview, getSyncStatus, getSuiteStatusMetrics, searchAll,
   DB_PATH,
   // Exported for testing
   extractTextFromAttributedBody, normalizePhone, isRealPersonEmail,
