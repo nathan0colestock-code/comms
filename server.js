@@ -35,7 +35,7 @@ loadEnv();
 
 const {
   collect, getRuns, getRunDetail, getMissingDates,
-  getGmailAccounts, saveGmailAccount, deleteGmailAccount, saveGmailTokens,
+  getGmailAccounts, getGmailAccountsWithTokens, saveGmailAccount, deleteGmailAccount, saveGmailTokens,
   testMessagesAccess,
   upsertGlossContact, upsertGlossNote,
   listContacts, getContactDetail, getRecentCommsForAI,
@@ -504,7 +504,7 @@ app.put('/api/settings', (req, res) => {
 // ─── Calendar list (all calendars per account) ───────────────────────────────
 app.get('/api/calendar/list', async (req, res) => {
   try {
-    const accounts = getGmailAccounts().filter(a =>
+    const accounts = getGmailAccountsWithTokens().filter(a =>
       hasScope(a.token_json, 'https://www.googleapis.com/auth/calendar.readonly'));
     const result = [];
     for (const acct of accounts) {
@@ -869,7 +869,7 @@ app.post('/api/address-book/sync/apple', async (req, res) => {
 
 app.post('/api/address-book/sync/google', async (req, res) => {
   try {
-    const accounts = getGmailAccounts().filter(a =>
+    const accounts = getGmailAccountsWithTokens().filter(a =>
       hasScope(a.token_json, 'https://www.googleapis.com/auth/contacts.readonly'));
     if (!accounts.length) {
       return res.json({
@@ -911,7 +911,7 @@ app.post('/api/address-book/sync', async (req, res) => {
       upsertAddressBookContact, pruneAddressBookAccount, recordAddressBookSync, upsertSpecialDate,
     });
 
-    const googleAccounts = getGmailAccounts().filter(a =>
+    const googleAccounts = getGmailAccountsWithTokens().filter(a =>
       hasScope(a.token_json, 'https://www.googleapis.com/auth/contacts.readonly'));
     const { importGoogleContactsForAccount } = require('./google-contacts');
     const google = [];
@@ -926,7 +926,7 @@ app.post('/api/address-book/sync', async (req, res) => {
         },
       }));
     }
-    const needs_reauth = getGmailAccounts()
+    const needs_reauth = getGmailAccountsWithTokens()
       .filter(a => !hasScope(a.token_json, 'https://www.googleapis.com/auth/contacts.readonly'))
       .map(a => a.email);
     try { rebuildPeople(); } catch (e) { console.warn('[rebuildPeople after full sync]', e.message); }
@@ -947,7 +947,7 @@ async function pollAddressBook() {
   } catch (e) { console.warn('[address-book/apple poll]', e.message); }
 
   try {
-    const accounts = getGmailAccounts().filter(a =>
+    const accounts = getGmailAccountsWithTokens().filter(a =>
       hasScope(a.token_json, 'https://www.googleapis.com/auth/contacts.readonly'));
     if (accounts.length) {
       const { importGoogleContactsForAccount } = require('./google-contacts');
@@ -973,7 +973,7 @@ async function pollAddressBook() {
 
 // ─── Calendar polling ───────────────────────────────────────────────────────
 async function pollCalendar() {
-  const accounts = getGmailAccounts();
+  const accounts = getGmailAccountsWithTokens();
   const enabledCalendars = getSetting('enabled_calendars', {});
   let total = 0;
   for (const acct of accounts) {
