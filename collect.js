@@ -410,6 +410,19 @@ function openDb() {
       summary_json TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_email_helper_runs_started ON email_helper_runs(started_at DESC);
+
+    -- C-P-01: captured draft bodies so we can compute edit-rate vs the
+    -- user's eventual sent reply in the same Gmail thread.
+    CREATE TABLE IF NOT EXISTS email_draft_log (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      thread_id   TEXT NOT NULL,
+      account     TEXT,
+      subject     TEXT,
+      draft_body  TEXT NOT NULL,
+      created_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_email_draft_log_thread  ON email_draft_log(thread_id);
+    CREATE INDEX IF NOT EXISTS idx_email_draft_log_created ON email_draft_log(created_at DESC);
   `);
 
   // Migrations for emails table
@@ -425,10 +438,20 @@ function openDb() {
   db.exec('CREATE INDEX IF NOT EXISTS idx_address_book_person ON address_book(person_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_address_book_link   ON address_book(link_id)');
 
-  // Migration for gloss_contacts: person_id FK.
+  // Migration for gloss_contacts: person_id FK + health/cadence fields.
   const gcCols = db.pragma('table_info(gloss_contacts)').map(c => c.name);
   if (!gcCols.includes('person_id')) db.exec('ALTER TABLE gloss_contacts ADD COLUMN person_id INTEGER REFERENCES people(id)');
+  // SPEC 3: per-contact target cadence (days). NULL = no target set.
+  if (!gcCols.includes('target_cadence_days')) db.exec('ALTER TABLE gloss_contacts ADD COLUMN target_cadence_days INTEGER');
+  // C-I-03: dedup hash computed over canonical Gloss-push payload.
+  if (!gcCols.includes('gloss_push_hash')) db.exec('ALTER TABLE gloss_contacts ADD COLUMN gloss_push_hash TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_gloss_contacts_person ON gloss_contacts(person_id)');
+
+  // SPEC 3: back-fill the legacy `contacts` table per the literal spec.
+  const legacyContactCols = db.pragma('table_info(contacts)').map(c => c.name);
+  if (!legacyContactCols.includes('target_cadence_days')) {
+    db.exec('ALTER TABLE contacts ADD COLUMN target_cadence_days INTEGER');
+  }
 
   // Migration for runs: calls_count.
   const runCols = db.pragma('table_info(runs)').map(c => c.name);
@@ -1042,18 +1065,79 @@ function saveGmailTokens(id, tokens) {
 // gloss_contacts — profiles pushed from the notebook app
 // ---------------------------------------------------------------------------
 
+// Stable, deep-sorted JSON stringify — every object key is sorted
+// recursively, so logically-equivalent payloads hash to the same digest.
+function canonicalJsonStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return '[' + value.map(canonicalJsonStringify).join(',') + ']';
+  }
+  const keys = Object.keys(value).sort();
+  return '{' + keys.map(k =>
+    JSON.stringify(k) + ':' + canonicalJsonStringify(value[k])
+  ).join(',') + '}';
+}
+
+// C-I-03: compute a SHA-256 digest over the canonical Gloss push payload.
+// Only the fields that affect the profile content are included — synced_at
+// and other push-time timestamps rotate and would defeat dedup.
+function computeGlossPushHash(p) {
+  const payload = {
+    aliases:            Array.isArray(p.aliases) ? p.aliases.slice().sort() : [],
+    gloss_id:           p.gloss_id || null,
+    gloss_url:          p.gloss_url || null,
+    mention_count:      p.mention_count ?? 0,
+    last_mentioned_at:  p.last_mentioned_at || null,
+    priority:           p.priority ?? 0,
+    growth_note:        p.growth_note || null,
+    recent_context:     p.recent_context || [],
+    linked_collections: p.linked_collections || [],
+  };
+  return require('crypto').createHash('sha256')
+    .update(canonicalJsonStringify(payload))
+    .digest('hex');
+}
+
+// Priority → default target cadence (days). Used on first Gloss push when
+// target_cadence_days hasn't been set by the user yet.
+function defaultCadenceForPriority(priority) {
+  const p = Number(priority);
+  if (p === 1) return 7;
+  if (p === 2) return 30;
+  if (p === 3) return 90;
+  return 90;
+}
+
 function upsertGlossContact(p) {
   if (!p || !p.contact || !p.gloss_id) {
     throw new Error('upsertGlossContact: contact and gloss_id are required');
   }
   const db = openDb();
   try {
+    const newHash = computeGlossPushHash(p);
+    const existing = db.prepare(
+      'SELECT gloss_push_hash, target_cadence_days FROM gloss_contacts WHERE contact = ? COLLATE NOCASE'
+    ).get(p.contact);
+
+    // C-I-03: skip the heavy UPSERT when the canonical payload hasn't changed.
+    // Still bump synced_at so "last pushed" stays fresh.
+    if (existing && existing.gloss_push_hash === newHash) {
+      db.prepare('UPDATE gloss_contacts SET synced_at = ? WHERE contact = ? COLLATE NOCASE')
+        .run(new Date().toISOString(), p.contact);
+      return { skipped: true, hash: newHash };
+    }
+
+    // Default the target cadence from priority only on first push — never
+    // overwrite a user-set cadence.
+    const cadence = existing?.target_cadence_days ?? defaultCadenceForPriority(p.priority);
+
     db.prepare(`
       INSERT INTO gloss_contacts (
         contact, aliases, gloss_id, gloss_url,
         mention_count, last_mentioned_at, priority, growth_note,
-        recent_context, linked_collections, synced_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        recent_context, linked_collections, synced_at,
+        gloss_push_hash, target_cadence_days
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(contact) DO UPDATE SET
         aliases            = excluded.aliases,
         gloss_id           = excluded.gloss_id,
@@ -1064,7 +1148,9 @@ function upsertGlossContact(p) {
         growth_note        = excluded.growth_note,
         recent_context     = excluded.recent_context,
         linked_collections = excluded.linked_collections,
-        synced_at          = excluded.synced_at
+        synced_at          = excluded.synced_at,
+        gloss_push_hash    = excluded.gloss_push_hash,
+        target_cadence_days = COALESCE(gloss_contacts.target_cadence_days, excluded.target_cadence_days)
     `).run(
       p.contact,
       JSON.stringify(p.aliases || []),
@@ -1077,8 +1163,112 @@ function upsertGlossContact(p) {
       JSON.stringify(p.recent_context || []),
       JSON.stringify(p.linked_collections || []),
       new Date().toISOString(),
+      newHash,
+      cadence,
     );
+    return { skipped: false, hash: newHash };
   } finally { db.close(); }
+}
+
+// SPEC 3: relational health score.
+function getContactHealth(contactKey) {
+  if (!contactKey) return null;
+  const db = openDb();
+  try {
+    const gc = db.prepare(
+      'SELECT contact, priority, target_cadence_days FROM gloss_contacts WHERE contact = ? COLLATE NOCASE'
+    ).get(contactKey);
+    const name = gc?.contact || contactKey;
+
+    const lastMsg = db.prepare(
+      `SELECT MAX(sent_at) AS t FROM messages WHERE contact = ? COLLATE NOCASE`
+    ).get(name)?.t || null;
+    const lastEmail = db.prepare(
+      `SELECT MAX(date)    AS t FROM emails   WHERE contact = ? COLLATE NOCASE`
+    ).get(name)?.t || null;
+
+    const tMsg   = lastMsg   ? Date.parse(lastMsg)                  : null;
+    const tEmail = lastEmail ? Date.parse(lastEmail + 'T00:00:00Z') : null;
+    const last   = [tMsg, tEmail].filter(t => Number.isFinite(t));
+    const lastMs = last.length ? Math.max(...last) : null;
+
+    const target = (gc?.target_cadence_days != null)
+      ? gc.target_cadence_days
+      : defaultCadenceForPriority(gc?.priority);
+
+    if (!lastMs) {
+      return { contact: name, last_contact_at: null, days_since: null, target, score: null, band: 'red' };
+    }
+    const daysSince = Math.max(0, (Date.now() - lastMs) / 86400000);
+    const score = target > 0 ? daysSince / target : null;
+    let band = 'healthy';
+    if (score != null && score >= 2.0)      band = 'red';
+    else if (score != null && score >= 1.0) band = 'overdue';
+    return {
+      contact: name,
+      last_contact_at: new Date(lastMs).toISOString(),
+      days_since: Math.round(daysSince * 10) / 10,
+      target,
+      score: score != null ? Math.round(score * 100) / 100 : null,
+      band,
+    };
+  } finally { db.close(); }
+}
+
+// SPEC 3: people-review listing. sort=health (default) → overdue first.
+function listPeopleForReview({ sort = 'health', limit = 500 } = {}) {
+  const db = openDb();
+  let rows;
+  try {
+    rows = db.prepare(`
+      SELECT contact, priority, target_cadence_days
+      FROM gloss_contacts
+      ORDER BY contact COLLATE NOCASE ASC
+      LIMIT ?
+    `).all(limit);
+  } finally { db.close(); }
+
+  const enriched = rows.map(r => ({
+    contact: r.contact,
+    priority: r.priority ?? 0,
+    target_cadence_days: r.target_cadence_days ?? defaultCadenceForPriority(r.priority),
+    health: getContactHealth(r.contact),
+  }));
+
+  if (sort === 'alpha') {
+    return enriched.sort((a, b) => a.contact.localeCompare(b.contact));
+  }
+  const bandWeight = { red: 2, overdue: 1, healthy: 0 };
+  return enriched.sort((a, b) => {
+    const ba = bandWeight[a.health?.band || 'healthy'];
+    const bb = bandWeight[b.health?.band || 'healthy'];
+    if (ba !== bb) return bb - ba;
+    const sa = a.health?.score ?? -1;
+    const sb = b.health?.score ?? -1;
+    if (sa !== sb) return sb - sa;
+    return a.contact.localeCompare(b.contact);
+  });
+}
+
+// SPEC 3: set/clear target_cadence_days on a contact.
+function setContactCadence(contactKey, days) {
+  if (!contactKey) throw new Error('setContactCadence: contact required');
+  let v;
+  if (days === null || days === '' || days === undefined) {
+    v = null;
+  } else {
+    const n = Number(days);
+    if (!Number.isFinite(n) || n <= 0) throw new Error('target_cadence_days must be a positive integer or null');
+    v = Math.round(n);
+  }
+  const db = openDb();
+  try {
+    const res = db.prepare(
+      'UPDATE gloss_contacts SET target_cadence_days = ? WHERE contact = ? COLLATE NOCASE'
+    ).run(v, contactKey);
+    if (res.changes === 0) throw new Error('contact not found in gloss_contacts');
+  } finally { db.close(); }
+  return getContactHealth(contactKey);
 }
 
 function getGlossContact(contact) {
@@ -3062,6 +3252,122 @@ function getSuiteStatusMetrics() {
   } finally { db.close(); }
 }
 
+// ---------------------------------------------------------------------------
+// Email draft log + edit-rate telemetry (C-P-01)
+// ---------------------------------------------------------------------------
+
+function recordEmailDraft({ thread_id, account = null, subject = null, draft_body }) {
+  if (!thread_id || !draft_body) return null;
+  const db = openDb();
+  try {
+    const res = db.prepare(
+      `INSERT INTO email_draft_log (thread_id, account, subject, draft_body, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(thread_id, account, subject, draft_body, new Date().toISOString());
+    return { id: res.lastInsertRowid };
+  } finally { db.close(); }
+}
+
+// Cheap, deterministic edit-distance proxy using token-level Jaccard. Full
+// Levenshtein on long emails is O(n*m); we only need a coarse signal.
+function approximateEditRatio(draft, sent) {
+  const norm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const a = norm(draft);
+  const b = norm(sent);
+  if (!a && !b) return 0;
+  if (!a || !b) return 1;
+  if (a === b) return 0;
+  const ta = new Set(a.split(' ').filter(Boolean));
+  const tb = new Set(b.split(' ').filter(Boolean));
+  let inter = 0;
+  for (const t of ta) if (tb.has(t)) inter++;
+  const union = ta.size + tb.size - inter;
+  if (union === 0) return 0;
+  return 1 - inter / union;
+}
+
+function getEmailEditRate({ days = 7 } = {}) {
+  const db = openDb();
+  try {
+    const since = new Date(Date.now() - days * 86400_000).toISOString();
+    const drafts = db.prepare(
+      `SELECT id, thread_id, draft_body, created_at
+       FROM email_draft_log WHERE created_at >= ?`
+    ).all(since);
+    if (!drafts.length) return { compared: 0, avg_edit_ratio: null, distribution: null };
+    let compared = 0;
+    let sumRatio = 0;
+    const dist = { unedited: 0, light: 0, heavy: 0, rewrite: 0 };
+    for (const d of drafts) {
+      const sent = db.prepare(
+        `SELECT snippet, subject FROM emails
+         WHERE thread_id = ? AND direction = 'sent'
+           AND date >= date(?) ORDER BY date ASC LIMIT 1`
+      ).get(d.thread_id, d.created_at);
+      if (!sent) continue;
+      const ratio = approximateEditRatio(d.draft_body, sent.snippet || '');
+      compared++;
+      sumRatio += ratio;
+      if (ratio < 0.1)      dist.unedited++;
+      else if (ratio < 0.3) dist.light++;
+      else if (ratio < 0.7) dist.heavy++;
+      else                  dist.rewrite++;
+    }
+    if (!compared) return { compared: 0, avg_edit_ratio: null, distribution: null };
+    return {
+      compared,
+      avg_edit_ratio: Math.round((sumRatio / compared) * 1000) / 1000,
+      distribution: dist,
+    };
+  } finally { db.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// Cadence adherence telemetry (C-P-02)
+// ---------------------------------------------------------------------------
+
+function getCadenceAdherence({ days = 7 } = {}) {
+  const db = openDb();
+  try {
+    const rows = db.prepare(
+      `SELECT contact, priority, target_cadence_days FROM gloss_contacts`
+    ).all();
+    const now = Date.now();
+    const windowStart = now - days * 86400_000;
+    let due = 0;
+    let met = 0;
+    for (const r of rows) {
+      const target = (r.target_cadence_days != null)
+        ? r.target_cadence_days
+        : defaultCadenceForPriority(r.priority);
+      if (!target || target <= 0) continue;
+      const lastMsg = db.prepare(
+        `SELECT MAX(sent_at) AS t FROM messages WHERE contact = ? COLLATE NOCASE`
+      ).get(r.contact)?.t || null;
+      const lastEmail = db.prepare(
+        `SELECT MAX(date)    AS t FROM emails   WHERE contact = ? COLLATE NOCASE`
+      ).get(r.contact)?.t || null;
+      const tMsg   = lastMsg   ? Date.parse(lastMsg)                  : null;
+      const tEmail = lastEmail ? Date.parse(lastEmail + 'T00:00:00Z') : null;
+      const last = [tMsg, tEmail].filter(t => Number.isFinite(t));
+      if (!last.length) continue;
+      const lastMs = Math.max(...last);
+
+      // Was the contact already overdue at the start of the window?
+      const ageAtWindow = (windowStart - lastMs) / 86400_000;
+      if (ageAtWindow < target) continue; // not yet due 7d ago → not in denominator
+      due++;
+      const ageNow = (now - lastMs) / 86400_000;
+      if (ageNow < target) met++;
+    }
+    return {
+      due_last_7d: due,
+      met,
+      adherence_rate: due > 0 ? Math.round((met / due) * 1000) / 1000 : null,
+    };
+  } finally { db.close(); }
+}
+
 // Richer signal surface for Maestro's nightly improvement agent.
 function getNightlyTelemetry() {
   const db = openDb();
@@ -3096,7 +3402,12 @@ function getNightlyTelemetry() {
       no_runs_7d:            metrics.runs_last_7d === 0,
       no_gmail_accounts:     metrics.gmail_accounts === 0,
     };
-    return { metrics, health };
+    // C-P-01 + C-P-02
+    let edit_rate_7d = null;
+    try { edit_rate_7d = getEmailEditRate({ days: 7 }); } catch {}
+    let cadence_adherence_7d = null;
+    try { cadence_adherence_7d = getCadenceAdherence({ days: 7 }); } catch {}
+    return { metrics, health, edit_rate_7d, cadence_adherence_7d };
   } finally { db.close(); }
 }
 
@@ -3141,6 +3452,12 @@ module.exports = {
   // Gloss profiles
   upsertGlossContact, getGlossContact, listContacts, getContactDetail, getRecentCommsForAI,
   saveContactInsight,
+  // SPEC 3 — Relational health score
+  getContactHealth, listPeopleForReview, setContactCadence,
+  defaultCadenceForPriority, computeGlossPushHash, canonicalJsonStringify,
+  // C-P-01 / C-P-02
+  recordEmailDraft, getEmailEditRate, getCadenceAdherence,
+  approximateEditRatio,
   // Gloss notes
   upsertGlossNote,
   // Calendar
