@@ -3062,6 +3062,44 @@ function getSuiteStatusMetrics() {
   } finally { db.close(); }
 }
 
+// Richer signal surface for Maestro's nightly improvement agent.
+function getNightlyTelemetry() {
+  const db = openDb();
+  const count = (sql) => { try { return db.prepare(sql).get()?.n || 0; } catch { return 0; } };
+  const scalar = (sql) => {
+    try { const row = db.prepare(sql).get(); return row ? (Object.values(row)[0] ?? null) : null; }
+    catch { return null; }
+  };
+  try {
+    const lastRun     = scalar("SELECT MAX(date) FROM runs");
+    const lastMessage = scalar("SELECT MAX(sent_at) FROM messages");
+    const lastEmail   = scalar("SELECT MAX(date) FROM emails");
+    const daysAgo = (iso) => { if (!iso) return null; const t = Date.parse(iso); return Number.isFinite(t) ? Math.floor((Date.now() - t) / 86400000) : null; };
+    const metrics = {
+      total_messages:   count('SELECT COUNT(*) AS n FROM messages'),
+      total_emails:     count('SELECT COUNT(*) AS n FROM emails'),
+      total_calls:      count('SELECT COUNT(*) AS n FROM calls'),
+      total_runs:       count('SELECT COUNT(*) AS n FROM runs'),
+      runs_last_7d:     count("SELECT COUNT(*) AS n FROM runs WHERE date >= date('now','-7 day')"),
+      messages_last_7d: count("SELECT COUNT(*) AS n FROM messages WHERE date(sent_at) >= date('now','-7 day')"),
+      emails_last_7d:   count("SELECT COUNT(*) AS n FROM emails WHERE date >= date('now','-7 day')"),
+      gmail_accounts:   count('SELECT COUNT(DISTINCT id) AS n FROM gmail_accounts'),
+      gloss_contacts:   count('SELECT COUNT(*) AS n FROM gloss_contacts'),
+      last_run_date:    lastRun,
+      last_message_at:  lastMessage,
+      last_email_at:    lastEmail,
+    };
+    const health = {
+      last_run_gap_days:     daysAgo(lastRun),
+      last_message_age_days: daysAgo(lastMessage),
+      last_email_age_days:   daysAgo(lastEmail),
+      no_runs_7d:            metrics.runs_last_7d === 0,
+      no_gmail_accounts:     metrics.gmail_accounts === 0,
+    };
+    return { metrics, health };
+  } finally { db.close(); }
+}
+
 // ---------------------------------------------------------------------------
 // Message / email search across all runs
 // ---------------------------------------------------------------------------
@@ -3130,7 +3168,7 @@ module.exports = {
   // Sent message style samples
   getRecentSentMessagesForStyle,
   // Overview + search
-  getOverview, getSyncStatus, getSuiteStatusMetrics, searchAll,
+  getOverview, getSyncStatus, getSuiteStatusMetrics, getNightlyTelemetry, searchAll,
   DB_PATH,
   // Exported for testing
   extractTextFromAttributedBody, normalizePhone, isRealPersonEmail,

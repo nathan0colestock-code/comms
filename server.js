@@ -50,7 +50,7 @@ const {
   listAddressBook, getAddressBookContact, findAddressBookByIdentifiers, addressBookStats,
   rebuildPeople, resolvePerson, getPerson, mergePeople, rejectMergePair, findDuplicateCandidates,
   getPeopleReviewNext, markPersonReviewed, countPeopleDueForReview,
-  getOverview, getSyncStatus, getSuiteStatusMetrics, searchAll,
+  getOverview, getSyncStatus, getSuiteStatusMetrics, getNightlyTelemetry, searchAll,
   getSetting, saveSetting,
   upsertSpecialDate, listUpcomingSpecialDates, listSpecialDates, deleteSpecialDate,
   getRecentSentMessagesForStyle,
@@ -254,6 +254,20 @@ app.get('/api/status', (req, res) => {
     uptime_seconds: Math.floor(process.uptime()),
     metrics: getSuiteStatusMetrics(),
   });
+});
+
+// Richer signal surface for Maestro's nightly improvement agent. Bearer-gated.
+app.get('/api/telemetry/nightly', (req, res) => {
+  if (!requireApiKey(req)) return res.status(401).json({ error: 'auth required' });
+  try {
+    const t = getNightlyTelemetry();
+    res.json({
+      app: 'comms', version: PKG_VERSION,
+      date: new Date().toISOString().slice(0, 10),
+      uptime_seconds: Math.floor(process.uptime()),
+      ...t,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Legacy overview surface — used by the in-app UI and older tests.
