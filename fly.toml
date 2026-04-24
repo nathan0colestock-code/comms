@@ -1,4 +1,4 @@
-app = "comms-nc"
+app = "your-comms-app"
 primary_region = "ord"
 
 [build]

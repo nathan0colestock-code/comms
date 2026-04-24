@@ -1,9 +1,7 @@
-<!-- This project is orchestrated by Maestro. -->
-<!-- suite-verified: 2026-04-23 full pipeline E2E -->
 
-# Comm's
+# Comms
 
-Comm's collects your daily iMessages and Gmail into a local SQLite database that your other personal apps can query. It runs as a lightweight background server on your Mac and exposes a dashboard for browsing history and triggering collection.
+Comms collects your iMessages and Gmail into a local SQLite database that your other personal apps can query. It runs as a lightweight background server on your Mac and exposes a dashboard for browsing history and triggering collection.
 
 The point isn't the dashboard — it's the database. Once Comm's is running, any other app you build can open `~/Library/Application Support/comms/comms.db` read-only and query exactly who you talked to, about what, and when — without touching iCloud, Google's servers, or any third-party service.
 
@@ -173,7 +171,7 @@ Comms runs an inbox-triage job at **08:00 and 12:00 local** (hours configurable 
 
 - **transactional** (receipts, no-reply, 2FA) → leave alone
 - **newsletter / bulk** (List-Unsubscribe header + bulk-sender pattern) → queue the unsubscribe URL for human review; optionally archive if `AUTO_ARCHIVE_BULK=true`
-- **real person** → build a cached per-contact context profile from gloss + comms + message history and draft a Gemini-generated reply into Gmail Drafts. Never sends.
+- **real person** → draft a context-aware reply into Gmail Drafts. Never sends.
 
 The classifier is pure heuristic — free and deterministic. Unsubscribes never auto-click; they accumulate in `email_unsub_queue` for weekly batch review.
 
@@ -213,7 +211,7 @@ const { messages, emails } = await res.json();
 The tunnel runs automatically at login via a launchd agent. Call the public URL from any deployed app:
 
 ```js
-const res = await fetch('https://crevice-erupt-caucus.ngrok-free.dev/api/runs/2026-04-22', {
+const res = await fetch('https://<your-ngrok-static-domain>/api/runs/2026-04-22', {
   headers: { 'Authorization': `Bearer ${process.env.COMMS_API_KEY}` }
 });
 const { messages, emails } = await res.json();

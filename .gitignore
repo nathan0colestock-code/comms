@@ -4,3 +4,8 @@ node_modules/
 *.db-shm
 *.db-wal
 tasks.md
+CLAUDE.md
+AUDIT-*.md
+SYSTEM.md
+LESSONS.md
+reports/
