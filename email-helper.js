@@ -317,6 +317,17 @@ async function runForAccount(account, db) {
         inReplyTo: msg.messageId,
         references: msg.references || msg.messageId,
       });
+      // C-P-01: capture the draft so nightly telemetry can compute the
+      // edit-rate vs the user's eventual sent reply.
+      try {
+        const { recordEmailDraft } = require('./collect');
+        recordEmailDraft({
+          thread_id: t.threadId,
+          account: account.email,
+          subject: msg.subject || null,
+          draft_body: body,
+        });
+      } catch {}
       counts.drafted++;
       results.push({ thread: t.threadId, action: 'draft', class: cls.kind, subject: msg.subject });
     } catch (err) {

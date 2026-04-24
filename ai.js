@@ -11,6 +11,44 @@ const { GoogleGenAI } = require('@google/genai');
 
 const MODEL = 'gemini-2.5-flash';
 
+// C-I-01: Contact-insight model selection (Gemini-only variant).
+//
+// The original overnight spec called for a Claude-with-prompt-caching path
+// falling back to Gemini. ANTHROPIC_API_KEY is not available in this build,
+// so INSIGHTS_MODEL selects between Gemini variants instead. The ring of
+// acceptable values is intentionally small — unknown values fall back to the
+// default so a typo never blows up the insight surface.
+//
+//   'claude'            → alias for the default (most-capable Gemini)
+//   'gemini-2.5-pro'    → higher-reasoning Gemini
+//   'gemini-2.5-flash'  → default; fast, cheap
+//   'gemini-2.0-flash'  → older flash, used as fallback on 5xx/timeouts
+//
+// See overnight-report.md for the Maestro recommendation noting the deferred
+// Claude + prompt-caching work.
+const INSIGHT_MODEL_MAP = {
+  'claude':           'gemini-2.5-pro',
+  'gemini-2.5-pro':   'gemini-2.5-pro',
+  'gemini-2.5-flash': 'gemini-2.5-flash',
+  'gemini-2.0-flash': 'gemini-2.0-flash',
+};
+const INSIGHT_FALLBACK_MODEL = 'gemini-2.0-flash';
+
+function resolveInsightsModel() {
+  const raw = (process.env.INSIGHTS_MODEL || 'claude').toLowerCase();
+  return INSIGHT_MODEL_MAP[raw] || 'gemini-2.5-flash';
+}
+
+// Decide whether an error looks like a retryable Gemini 5xx. The SDK surfaces
+// HTTP errors with a numeric `status` on the cause; it also decorates the
+// message with the status code, so we string-match as a secondary signal.
+function isRetryableGeminiError(err) {
+  const code = err?.status || err?.cause?.status || err?.response?.status;
+  if (typeof code === 'number' && code >= 500) return true;
+  const msg = String(err?.message || '');
+  return /\b5\d\d\b/.test(msg) || /ECONNRESET|ETIMEDOUT|UND_ERR_/.test(msg);
+}
+
 // ---------------------------------------------------------------------------
 // System prompts (constraints shared across both generators)
 // ---------------------------------------------------------------------------
@@ -76,11 +114,11 @@ function getClient() {
   return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 }
 
-async function callGemini(systemInstruction, userPrompt, { temperature = 0.4 } = {}) {
+async function callGemini(systemInstruction, userPrompt, { temperature = 0.4, model = MODEL } = {}) {
   const ai = getClient();
   try {
     const result = await ai.models.generateContent({
-      model: MODEL,
+      model,
       contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
       config: { systemInstruction, temperature },
     });
@@ -88,7 +126,25 @@ async function callGemini(systemInstruction, userPrompt, { temperature = 0.4 } =
     if (!text) throw new Error('Gemini returned empty response');
     return text;
   } catch (err) {
-    throw new Error(`Gemini call failed: ${err.message}`);
+    const wrapped = new Error(`Gemini call failed: ${err.message}`);
+    wrapped.cause = err;
+    wrapped.status = err?.status || err?.cause?.status;
+    throw wrapped;
+  }
+}
+
+// C-I-01: insights-specific call. Tries the INSIGHTS_MODEL selection first
+// and falls back to gemini-2.0-flash on 5xx / transient errors so a Gemini
+// hiccup doesn't burn the user's manual insight click.
+async function callInsightsModel(systemInstruction, userPrompt, opts = {}) {
+  const primary = resolveInsightsModel();
+  try {
+    return await callGemini(systemInstruction, userPrompt, { ...opts, model: primary });
+  } catch (err) {
+    if (primary !== INSIGHT_FALLBACK_MODEL && isRetryableGeminiError(err)) {
+      return callGemini(systemInstruction, userPrompt, { ...opts, model: INSIGHT_FALLBACK_MODEL });
+    }
+    throw err;
   }
 }
 
@@ -155,7 +211,7 @@ async function generateContactInsight({ contact, glossProfile, recentComms }) {
     'Write a 2-3 sentence insight paragraph per the rules in the system prompt.',
   ].join('\n');
 
-  return callGemini(INSIGHT_SYSTEM, prompt);
+  return callInsightsModel(INSIGHT_SYSTEM, prompt);
 }
 
 async function generateMeetingBrief({ event, attendeeProfiles }) {
@@ -569,6 +625,12 @@ module.exports = {
   playbookModelList,
   isBuiltinPlaybookKey,
   PLAYBOOK_MODELS,
+  // C-I-01: insights model selection (exported for tests)
+  resolveInsightsModel,
+  isRetryableGeminiError,
+  INSIGHT_MODEL_MAP,
+  INSIGHT_FALLBACK_MODEL,
+  callInsightsModel,
   // Exported for testing / introspection
   INSIGHT_SYSTEM,
   BRIEF_SYSTEM,

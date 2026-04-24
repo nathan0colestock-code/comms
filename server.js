@@ -21,6 +21,11 @@ const path    = require('path');
 const crypto  = require('crypto');
 const express = require('express');
 const helmet  = require('helmet');
+const { log, httpMiddleware, getRecent: getRecentLogs, patchConsole } = require('./log');
+// Route all console.* through the structured log ring buffer. This keeps
+// unmigrated `[tag] message` lines flowing to stderr exactly as before, while
+// also capturing them as event='console' entries for /api/logs/recent.
+patchConsole();
 
 // Load .env before requiring modules that read process.env
 function loadEnv() {
@@ -50,6 +55,7 @@ const {
   listAddressBook, getAddressBookContact, findAddressBookByIdentifiers, addressBookStats,
   rebuildPeople, resolvePerson, getPerson, mergePeople, rejectMergePair, findDuplicateCandidates,
   getPeopleReviewNext, markPersonReviewed, countPeopleDueForReview,
+  getContactHealth, listPeopleForReview, setContactCadence,
   getOverview, getSyncStatus, getSuiteStatusMetrics, getNightlyTelemetry, searchAll,
   getSetting, saveSetting,
   upsertSpecialDate, listUpcomingSpecialDates, listSpecialDates, deleteSpecialDate,
@@ -74,6 +80,8 @@ if (IS_PROD) app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: false, limit: '2mb' }));
+// Structured logging: trace-id propagation + per-request log line.
+app.use(httpMiddleware());
 
 // ─── Auth ───────────────────────────────────────────────────────────────────
 // Dev fallback is retained for LaunchAgent compatibility but the socket now
@@ -191,6 +199,22 @@ function recordLoginAttempt(req) {
 }
 
 app.get('/api/health', (req, res) => res.json({ ok: true, now: Date.now() }));
+
+// Structured log ring-buffer reader. Bearer-gated; Maestro's hourly
+// log-collector authenticates with API_KEY or SUITE_API_KEY.
+app.get('/api/logs/recent', (req, res) => {
+  if (!requireApiKey(req)) return res.status(401).json({ error: 'bearer required' });
+  try {
+    const since   = typeof req.query.since === 'string' ? req.query.since : null;
+    const level   = typeof req.query.level === 'string' ? req.query.level : null;
+    const limit   = Math.max(1, Math.min(1000, Number(req.query.limit) || 500));
+    const traceId = typeof req.query.trace_id === 'string' ? req.query.trace_id : null;
+    const entries = getRecentLogs({ since, level, limit, traceId });
+    res.json({ ok: true, count: entries.length, entries });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.get('/login', (req, res) => {
   const err = req.query.error ? '<p style="color:#e05c5c;margin:0">Wrong password.</p>' : '';
@@ -482,6 +506,43 @@ app.get('/api/contacts/:name', (req, res) => {
     } catch (e) { /* non-fatal */ }
     res.json(detail);
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// SPEC 3 — health score for a single contact.
+app.get('/api/contacts/:name/health', (req, res) => {
+  try { res.json({ ok: true, health: getContactHealth(req.params.name) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// SPEC 3 — PATCH target_cadence_days on a contact.
+app.patch('/api/contacts/:name', (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!('target_cadence_days' in body)) {
+      return res.status(400).json({ error: 'target_cadence_days is required' });
+    }
+    const health = setContactCadence(req.params.name, body.target_cadence_days);
+    res.json({ ok: true, health });
+  } catch (e) {
+    const code = /not found/.test(e.message) ? 404
+               : /positive integer|required/.test(e.message) ? 400
+               : 500;
+    res.status(code).json({ error: e.message });
+  }
+});
+
+// SPEC 3 minimal-UX variant: dedicated cadence settings endpoint.
+app.put('/api/contacts/:name/cadence', (req, res) => {
+  try {
+    const body = req.body || {};
+    const health = setContactCadence(req.params.name, body.target_cadence_days ?? null);
+    res.json({ ok: true, health });
+  } catch (e) {
+    const code = /not found/.test(e.message) ? 404
+               : /positive integer|required/.test(e.message) ? 400
+               : 500;
+    res.status(code).json({ error: e.message });
+  }
 });
 
 app.post('/api/contacts/:name/insight', async (req, res) => {
@@ -974,6 +1035,18 @@ app.post('/api/people/reject-merge', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// SPEC 3 — Flat people/review listing. Default sort=health (most-overdue
+// first); `?sort=alpha` returns the legacy alphabetic order.
+app.get('/api/people/review', (req, res) => {
+  try {
+    const sort = req.query.sort === 'alpha' ? 'alpha' : 'health';
+    res.json({ ok: true, sort, people: listPeopleForReview({ sort }) });
+  } catch (e) {
+    log('error', 'people_review_list_failed', { error: e.message, trace_id: req.trace_id });
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── People review (on-demand flashcards) ───────────────────────────────────
 // Deliberately registered BEFORE /api/people/:id so "review" isn't captured
 // as a person id. The UI hits /next?skip=N to walk the queue, then posts to
@@ -1251,6 +1324,7 @@ async function pollCalendar() {
 // ─── Boot ───────────────────────────────────────────────────────────────────
 if (require.main === module) {
   app.listen(PORT, BIND_HOST, () => {
+    log('info', 'server_boot', { url: `http://${BIND_HOST}:${PORT}`, db: DB_PATH });
     console.log(`Comm's  →  http://${BIND_HOST}:${PORT}`);
     console.log(`DB      →  ${DB_PATH}`);
     // Kick off calendar polling on boot and every 30 min thereafter.
