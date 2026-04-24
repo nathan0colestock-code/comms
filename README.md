@@ -1,8 +1,8 @@
 # Comms
 
-Comms is a personal relationship intelligence hub for your Mac. It collects your iMessages, Gmail, call history, and calendar — then puts AI to work helping you show up prepared for every meeting, keep relationships warm, and manage your inbox without losing context.
+Comms is a personal relationship intelligence hub. It collects your iMessages, Gmail, call history, and calendar — then puts AI to work helping you show up prepared for every meeting, keep relationships warm, and manage your inbox without losing context.
 
-Everything runs locally. Your messages, contacts, and communication history never leave your machine.
+It has two parts: a **local collector** that runs on your Mac (reading iMessages, call history, and Apple Contacts directly from macOS), and a **server** that can run locally or deploy to Fly.io (handling Gmail, Google Calendar, Google Contacts, the web UI, and all API access). iMessage data never leaves your machine. Gmail metadata flows through your own OAuth credentials.
 
 Part of a five-app personal suite: [maestro](https://github.com/nathan0colestock-code/maestro) · [gloss](https://github.com/nathan0colestock-code/gloss) · [scribe](https://github.com/nathan0colestock-code/scribe) · [black hole](https://github.com/nathan0colestock-code/black)
 
@@ -268,11 +268,12 @@ npm test   # 42 tests — unit, DB, and HTTP via Node's built-in test runner
 
 ## Privacy
 
-- iMessages: stored locally only, nothing transmitted
-- Gmail: only metadata (sender, subject, snippet), full bodies never requested
-- Contacts: resolved from macOS AddressBook, no external calls
-- AI runs through Gemini via your own API key — no third-party indexing
-- No analytics, no cloud storage except optional Fly.io deployment + R2 backup
+- **iMessages + call history**: read directly from macOS, stored in your local SQLite database, never transmitted
+- **Gmail**: only metadata (sender, subject, snippet) — full bodies never requested; flows through your own Google OAuth credentials
+- **Apple Contacts**: read directly from macOS AddressBook, no external calls
+- **Google Contacts/Calendar**: fetched via Google APIs using your OAuth tokens
+- **AI**: runs through Gemini via your own API key — no third-party indexing
+- No analytics; SQLite optionally replicated to your own Cloudflare R2 bucket via Litestream
 
 ---
 
