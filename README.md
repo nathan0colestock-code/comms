@@ -289,3 +289,13 @@ Comms is the **relationships + meetings** node of a five-app personal suite. Ind
 | **[maestro](https://github.com/nathan0colestock-code/maestro)** | Overnight code orchestration | Polls `/api/status`; dispatches feature sets |
 
 All five apps expose `GET /api/status` → `{ app, version, ok, uptime_seconds, metrics }`, Bearer-authed.
+
+---
+
+---
+
+## Have Claude help you set this up
+
+Paste this into [Claude](https://claude.ai) to get guided setup assistance:
+
+> I want to set up Comms from https://github.com/nathan0colestock-code/comms. It reads my iMessages, Gmail, and calendar. The server can run locally or on Fly.io, but the iMessage and call history collection requires running the collector on my Mac with Full Disk Access enabled. Help me get it set up step by step — I'll tell you whether I want it local-only or also deployed to Fly.io, and I'll share any error messages as we go.

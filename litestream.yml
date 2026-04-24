@@ -3,7 +3,7 @@ dbs:
     replicas:
       - type: s3
         endpoint: ${R2_ENDPOINT}
-        bucket: nathan-suite-backups
+        bucket: your-r2-bucket
         path: comms/comms.db
         region: auto
         access-key-id: ${R2_ACCESS_KEY_ID}
